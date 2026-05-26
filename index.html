@@ -292,10 +292,10 @@
 
   .data-row { display: flex; gap: 8px; margin-bottom: 16px; }
   .data-btn {
-    flex: 1; padding: 12px; background: var(--card);
+    flex: 1; padding: 12px 6px; background: var(--card);
     border: 1px solid var(--border); border-radius: 10px;
-    font-size: 11px; font-weight: 700; color: var(--mute);
-    letter-spacing: 0.08em;
+    font-size: 10px; font-weight: 700; color: var(--mute);
+    letter-spacing: 0.04em; white-space: nowrap;
   }
   .data-btn:active { background: var(--light); }
 
@@ -415,6 +415,28 @@
   .bioimp-title { font-size: 13px; font-weight: 800; color: var(--grav); margin-bottom: 2px; }
   .bioimp-sub { font-size: 11px; color: var(--mute); }
   .bioimp-go { font-family: 'Anton', sans-serif; font-size: 24px; color: var(--grav); }
+
+  .rest-banner {
+    position: fixed; left: 14px; right: 14px;
+    bottom: calc(14px + env(safe-area-inset-bottom));
+    background: var(--ink); color: #fff;
+    border-radius: 16px; padding: 14px 18px;
+    display: none; justify-content: space-between; align-items: center;
+    box-shadow: 0 10px 30px rgba(17,17,17,0.25);
+    z-index: 45;
+  }
+  .rest-banner.show { display: flex; }
+  .rest-banner.done { background: var(--good); }
+  .rest-remaining {
+    font-family: 'Anton', sans-serif; font-size: 30px; line-height: 1; color: var(--accent);
+  }
+  .rest-banner.done .rest-remaining { color: #fff; }
+  .rest-times { font-size: 10px; color: rgba(255,255,255,0.6); letter-spacing: 0.04em; margin-top: 4px; }
+  .rest-skip {
+    background: rgba(255,255,255,0.12); color: #fff; border: none;
+    border-radius: 10px; padding: 10px 16px; font-family: 'Anton', sans-serif;
+    font-size: 14px; letter-spacing: 0.08em;
+  }
 </style>
 </head>
 <body>
@@ -573,6 +595,15 @@
   </div>
 </div>
 
+<!-- Rest banner: clock-based, survives leaving the app -->
+<div class="rest-banner" id="rest-banner">
+  <div class="rest-left">
+    <div class="rest-remaining" id="rest-remaining">0:00</div>
+    <div class="rest-times" id="rest-times"></div>
+  </div>
+  <button class="rest-skip" onclick="dismissRest()">OK</button>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -660,6 +691,17 @@ const TABS = [
 const GRAVITON_NAMES = new Set(
   Object.values(WORKOUTS).flatMap(w => w.exercises.filter(e => e.graviton).map(e => e.name))
 );
+
+// Rest seconds by exercise. Heavy compounds rest most, finishers least.
+const REST_120 = ['Agachamento','Leg press','Barra fixa (graviton)'];
+const REST_90 = ['Supino inclinado halter (30°)','Supino reto máquina/barra','Supino inclinado máquina','Supino reto halter','Desenvolvimento halter','Remada máquina apoiada','Remada unilateral','Remada baixa triângulo','Stiff controlado','Mesa flexora'];
+const REST_45_FIN = ['Abdômen máquina/polia','Abdômen infra/polia','Abdômen infra','Panturrilha em pé','Panturrilha sentado'];
+function restSecondsFor(ex){
+  if(ex.finisher || REST_45_FIN.includes(ex.name)) return 45;
+  if(REST_120.includes(ex.name)) return 120;
+  if(REST_90.includes(ex.name)) return 90;
+  return 60; // isolators and the rest
+}
 
 const K_CURRENT = 'wo_current_v5';
 const K_HISTORY = 'wo_history_v5';
@@ -890,7 +932,8 @@ function renderHistory(){
     +'</div>';
 
   html+='<div class="data-row">'
-    +'<button class="data-btn" onclick="openBackup()">EXPORTAR BACKUP</button>'
+    +'<button class="data-btn" onclick="exportPDF()">EXPORTAR PDF</button>'
+    +'<button class="data-btn" onclick="openBackup()">BACKUP</button>'
     +'<button class="data-btn" onclick="openImport()">IMPORTAR</button>'
     +'</div>';
 
@@ -1266,18 +1309,25 @@ function saveSet(){
   const r=parseInt(document.getElementById('in-reps').value)||0;
   if(r===0){ showToast('Coloca pelo menos 1 rep'); return; }
   const key=setKey(activeSetCtx.exIdx,activeSetCtx.setIdx);
+  const wId=current.workoutId;
+  const exObj = wId ? WORKOUTS[wId].exercises[activeSetCtx.exIdx] : null;
+  const restSecs = exObj ? restSecondsFor(exObj) : 60;
+  const isGrav = activeSetCtx.graviton;
+  const exName = activeSetCtx.exName;
 
-  if(activeSetCtx.graviton){
-    const prevMin=minWeightForExercise(activeSetCtx.exName);
+  if(isGrav){
+    const prevMin=minWeightForExercise(exName);
     current.sets[key]={weight:w,reps:r,done:true};
     saveAll(); closeAllSheets(); render();
+    startRest(restSecs);
     if(prevMin!==null && w<prevMin) showToast('Menos ajuda que antes: '+fmtWeight(w)+'kg');
     return;
   }
-  const max=maxWeightForExercise(activeSetCtx.exName);
+  const max=maxWeightForExercise(exName);
   current.sets[key]={weight:w,reps:r,done:true};
   const isPR=w>max&&w>0;
   saveAll(); closeAllSheets(); render();
+  startRest(restSecs);
   if(isPR) showToast('Novo recorde: '+fmtWeight(w)+'kg');
 }
 
@@ -1453,6 +1503,170 @@ function renderGuide(){
   html+='<div class="prog"><div class="prog-label">BARRA NO GRAVITON</div>'
     +gravRules.map(p=>'<div class="prog-row"><div class="prog-cond">'+p.c+'</div><div class="prog-act">'+p.a+'</div></div>').join('')+'</div>';
   return html;
+}
+
+// ============ REST (clock-based, survives leaving the app) ============
+let restEndTs = null;     // epoch ms when rest ends
+let restStartTs = null;   // epoch ms when set finished
+let restTick = null;
+
+function fmtClock(ts){
+  const d=new Date(ts);
+  return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0');
+}
+
+function startRest(secs){
+  restStartTs = Date.now();
+  restEndTs = restStartTs + secs*1000;
+  document.getElementById('rest-banner').classList.add('show');
+  document.getElementById('rest-banner').classList.remove('done');
+  renderRest();
+  if(restTick) clearInterval(restTick);
+  restTick = setInterval(renderRest, 250);
+}
+
+function renderRest(){
+  if(restEndTs===null) return;
+  const now=Date.now();
+  const remainMs = restEndTs - now;
+  const banner=document.getElementById('rest-banner');
+  const remEl=document.getElementById('rest-remaining');
+  const timesEl=document.getElementById('rest-times');
+
+  timesEl.textContent = 'início '+fmtClock(restStartTs)+'  ·  fim '+fmtClock(restEndTs);
+
+  if(remainMs<=0){
+    remEl.textContent='PRONTO';
+    banner.classList.add('done');
+    // stop ticking once done; keep banner until user taps OK
+    if(restTick){ clearInterval(restTick); restTick=null; }
+    return;
+  }
+  const s=Math.ceil(remainMs/1000);
+  const m=Math.floor(s/60);
+  remEl.textContent = m+':'+String(s%60).padStart(2,'0');
+}
+
+function dismissRest(){
+  restEndTs=null; restStartTs=null;
+  if(restTick){ clearInterval(restTick); restTick=null; }
+  const banner=document.getElementById('rest-banner');
+  banner.classList.remove('show'); banner.classList.remove('done');
+}
+
+// Recompute when app returns to foreground (iOS freezes JS while backgrounded)
+document.addEventListener('visibilitychange', function(){
+  if(!document.hidden && restEndTs!==null){
+    if(!restTick && Date.now()<restEndTs) restTick=setInterval(renderRest,250);
+    renderRest();
+  }
+});
+
+// ============ PDF EXPORT (native print → Save to PDF) ============
+function exportPDF(){
+  if(history.length===0){ showToast('Nada para exportar ainda'); return; }
+
+  const now=new Date();
+  const dateStr=fmtDate(now.toISOString())+' '+String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+
+  const totalVol=history.reduce((a,h)=>a+sessionVolume(h),0);
+  const last30=history.filter(h=>(Date.now()-new Date(h.completedAt))<30*86400000).length;
+
+  // sessions newest first with original index for delta
+  const indexed=history.map((s,i)=>({s,i}));
+  indexed.sort((a,b)=>new Date(b.s.completedAt)-new Date(a.s.completedAt));
+
+  let sessRows='';
+  indexed.forEach(({s:sess,i:origIdx})=>{
+    const w=WORKOUTS[sess.workoutId];
+    const vol=sessionVolume(sess);
+    const totalSets=sess.exercises.reduce((a,e)=>a+e.sets.length,0);
+    const prev=previousSessionByWorkout(sess.workoutId,origIdx);
+    let delta='';
+    if(prev){
+      const pv=sessionVolume(prev);
+      if(pv>0){ const pct=Math.round((vol-pv)/pv*100); if(pct!==0) delta=' <span class="d '+(pct>0?'up':'down')+'">'+(pct>0?'+':'')+pct+'%</span>'; }
+    }
+    const exLines=sess.exercises.map(e=>{
+      const setsStr=e.sets.map((s,i)=>fmtWeight(s.weight)+'×'+s.reps).join('  ·  ');
+      return '<tr><td class="exn">'+esc(e.name)+'</td><td class="exs">'+setsStr+'</td><td class="exv">'+fmtVol(exerciseVolume(e.sets))+'</td></tr>';
+    }).join('');
+    const note=sess.note?'<div class="note">'+esc(sess.note)+'</div>':'';
+    sessRows+='<div class="sess">'
+      +'<div class="sesshead"><span class="code">'+sess.workoutId+'</span><b>'+(w?esc(w.title):'')+'</b>'
+      +'<span class="date">'+fmtDate(sess.completedAt)+'</span></div>'
+      +'<div class="volline">'+fmtVol(vol)+' kg volume'+delta+'  ·  '+sess.exercises.length+' exercícios  ·  '+totalSets+' séries</div>'
+      +note
+      +'<table>'+exLines+'</table>'
+      +'</div>';
+  });
+
+  // body metrics
+  let bodySection='';
+  const bw=[...bodyweight].sort((a,b)=>new Date(a.date)-new Date(b.date));
+  if(bw.length>0){
+    const rows=bw.slice().reverse().map(b=>{
+      const lm=leanMass(b);
+      return '<tr><td>'+fmtDate(b.date)+'</td><td>'+fmtWeight(b.weight)+' kg</td>'
+        +'<td>'+(b.bf!=null&&b.bf>0?fmtWeight(b.bf)+'%':'-')+'</td>'
+        +'<td>'+(b.lbm!=null&&b.lbm>0?fmtWeight(b.lbm)+'%':'-')+'</td>'
+        +'<td>'+(lm!=null?fmtWeight(Math.round(lm*10)/10)+' kg':'-')+'</td>'
+        +'<td>'+(b.waist!=null&&b.waist>0?fmtWeight(b.waist)+' cm':'-')+'</td></tr>';
+    }).join('');
+    bodySection='<h2>Medidas corporais</h2>'
+      +'<table class="bodytbl"><tr class="th"><td>Data</td><td>Peso</td><td>%Gord</td><td>%Magra</td><td>M.magra</td><td>Cintura</td></tr>'+rows+'</table>';
+  }
+
+  const doc='<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">'
+    +'<meta name="viewport" content="width=device-width, initial-scale=1">'
+    +'<title>Relatório de Treino</title><style>'
+    +'@page{margin:14mm;}'
+    +'*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+    +'body{font-family:-apple-system,Helvetica,Arial,sans-serif;color:#111;margin:0;padding:20px;background:#fff;}'
+    +'h1{font-size:26px;margin:0 0 2px;color:#ff4d1a;letter-spacing:-0.5px;}'
+    +'.sub{font-size:11px;color:#888;letter-spacing:0.15em;text-transform:uppercase;margin-bottom:18px;}'
+    +'.summary{display:flex;gap:0;border:1px solid #e8e2d3;border-radius:10px;overflow:hidden;margin-bottom:22px;}'
+    +'.summary div{flex:1;text-align:center;padding:14px 6px;border-right:1px solid #e8e2d3;}'
+    +'.summary div:last-child{border-right:none;}'
+    +'.summary .n{font-size:22px;font-weight:800;color:#111;}'
+    +'.summary .l{font-size:9px;color:#999;letter-spacing:0.1em;text-transform:uppercase;margin-top:3px;}'
+    +'h2{font-size:13px;text-transform:uppercase;letter-spacing:0.12em;color:#ff4d1a;border-bottom:2px solid #ff4d1a;padding-bottom:5px;margin:22px 0 12px;}'
+    +'.sess{border:1px solid #e8e2d3;border-radius:10px;padding:12px 14px;margin-bottom:10px;page-break-inside:avoid;}'
+    +'.sesshead{display:flex;align-items:center;gap:8px;margin-bottom:4px;}'
+    +'.code{background:#ff4d1a;color:#fff;font-size:11px;font-weight:800;padding:2px 7px;border-radius:4px;}'
+    +'.sesshead b{font-size:13px;}'
+    +'.sesshead .date{margin-left:auto;font-size:11px;color:#888;}'
+    +'.volline{font-size:11px;color:#555;margin-bottom:6px;}'
+    +'.volline .d.up{color:#2d8659;font-weight:700;}.volline .d.down{color:#ff4d1a;font-weight:700;}'
+    +'.note{font-size:11px;font-style:italic;color:#333;background:#f5f1e8;border-radius:5px;padding:5px 8px;margin-bottom:6px;}'
+    +'table{width:100%;border-collapse:collapse;}'
+    +'.sess td{font-size:11px;padding:3px 0;border-top:1px dashed #eee;}'
+    +'.sess tr:first-child td{border-top:none;}'
+    +'.exn{font-weight:600;width:42%;}.exs{color:#555;}.exv{text-align:right;color:#999;width:60px;font-weight:700;}'
+    +'.bodytbl td{font-size:11px;padding:5px 6px;border-bottom:1px solid #eee;text-align:center;}'
+    +'.bodytbl .th td{font-weight:700;color:#888;font-size:9px;text-transform:uppercase;letter-spacing:0.05em;border-bottom:2px solid #e8e2d3;}'
+    +'.foot{margin-top:24px;text-align:center;font-size:9px;color:#aaa;letter-spacing:0.1em;}'
+    +'</style></head><body>'
+    +'<h1>Relatório de Treino</h1>'
+    +'<div class="sub">Bernardo Chaves · gerado em '+dateStr+'</div>'
+    +'<div class="summary">'
+    +'<div><div class="n">'+history.length+'</div><div class="l">Treinos</div></div>'
+    +'<div><div class="n">'+last30+'</div><div class="l">Últimos 30 dias</div></div>'
+    +'<div><div class="n">'+fmtVol(totalVol)+'</div><div class="l">Volume total kg</div></div>'
+    +'</div>'
+    +'<h2>Sessões</h2>'+sessRows
+    +bodySection
+    +'<div class="foot">PLANO DE TREINO · RELATÓRIO PESSOAL</div>'
+    +'</body></html>';
+
+  const win=window.open('','_blank');
+  if(!win){ showToast('Permita abrir a janela para gerar o PDF'); return; }
+  win.document.open();
+  win.document.write(doc);
+  win.document.close();
+  // give it a tick to render, then call print (iOS shows Save to PDF)
+  setTimeout(function(){ try{ win.focus(); win.print(); }catch(e){} }, 600);
+  showToast('Toque em Compartilhar → Salvar em PDF');
 }
 
 function showToast(msg){
