@@ -115,6 +115,11 @@ quarta (`PLAN_DAYS` com QUA opcional em `validatePlanShape`/`normalizePlan`/sche
   estagnação, desequilíbrios de volume, consistência, dores citadas nas notas. Resultado em
   veredito/progressos/problemas/recomendações, salvo em `wo_analysis_v1` (reabre sem gastar).
   A próxima geração de plano lê a última análise automaticamente.
+- **Histórico na nuvem (aba GUIA)**: treinos, medidas, plano e análise sincronizados entre
+  aparelhos via `POST /api/sync` no worker (Durable Object SQLite, instância única "main").
+  Autenticação por código: secret `SYNC_TOKEN` no worker + o mesmo código colado em cada
+  aparelho. Sincroniza no boot, ao voltar pro app e após cada mudança (debounce 1,5s); offline
+  não perde nada, converge na próxima. Só ativo quando o app roda no domínio do worker.
 
 ---
 
@@ -181,10 +186,19 @@ gráfico tem a métrica de assistência. Marcados com `graviton: true` no objeto
 Chaves em `localStorage`: `wo_current_v5` (treino em andamento, incl. `swaps` do dia),
 `wo_history_v5` (sessões finalizadas), `wo_bodyweight_v5` (medidas), `wo_active_v5` (aba ativa),
 `wo_plan_v1` (plano gerado/importado), `wo_plan_meta_v1` (data + resumo da geração),
-`wo_apikey_v1` (chave da API no modo direto), `wo_aiinst_v1` (instruções pro personal),
-`wo_proxy_v1` (URL do proxy).
-Há migração de histórico das versões v3/v4. Ao mudar o formato dos dados, subir a versão e
-escrever a migração.
+`wo_planstamp_v1` (quando o plano mudou, pro LWW do sync), `wo_apikey_v1` (chave no modo
+direto), `wo_aiinst_v1` (instruções pro personal), `wo_proxy_v1` (URL do proxy manual),
+`wo_analysis_v1` (última análise), `wo_synctoken_v1` (código de sincronização),
+`wo_tombs_v1` (deleções pendentes de subir), `wo_lastsync_v1`.
+Há migração de histórico das versões v3/v4 e carimbo de `id` em itens antigos sem id (o sync
+exige). Ao mudar o formato dos dados, subir a versão e escrever a migração.
+
+**Regras do merge de sincronização (worker.js, `TreinoStore`).**
+União por id para treinos/medidas — um aparelho com cópia velha nunca apaga nada do servidor.
+Deleções viram lápides (`t:<id>`) que impedem o item de ressuscitar. Plano usa `planStamp`
+(mais novo vence; `plan: null` com stamp novo = voltou ao original). Análise usa `generatedAt`.
+O cliente substitui o estado local pela resposta consolidada e zera as lápides locais.
+**Não trocar por "última escrita vence" no blob inteiro — perde dados de aparelho atrasado.**
 
 **Sem localStorage em ambiente de artifact.**
 O app foi feito para rodar hospedado. Em previews que bloqueiam storage ele degrada, mas o alvo

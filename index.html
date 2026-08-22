@@ -805,6 +805,10 @@ const K_APIKEY = 'wo_apikey_v1';    // modo direto (fallback); com proxy configu
 const K_AIINST = 'wo_aiinst_v1';
 const K_PROXY = 'wo_proxy_v1';      // URL do proxy que guarda a chave (Cloudflare Worker)
 const K_ANALYSIS = 'wo_analysis_v1'; // última análise de histórico feita pela IA
+const K_SYNCTOKEN = 'wo_synctoken_v1'; // código de sincronização (mesmo valor do secret SYNC_TOKEN no worker)
+const K_TOMBS = 'wo_tombs_v1';       // ids apagados localmente, pendentes de subir (lápides)
+const K_LASTSYNC = 'wo_lastsync_v1';
+const K_PLANSTAMP = 'wo_planstamp_v1'; // quando o plano ativo mudou por último (pro "mais novo vence")
 
 function loadStr(k){ try{return localStorage.getItem(k);}catch(e){return null;} }
 function loadObj(k){ try{const v=localStorage.getItem(k); return v?JSON.parse(v):null;}catch(e){return null;} }
@@ -834,6 +838,19 @@ let history = loadObj(K_HISTORY) || [];
 let bodyweight = loadObj(K_BW) || [];
 let activeSetCtx = null;
 let activeSwapCtx = null;
+
+// A sincronização depende de id único por item; registros antigos (migrados
+// de v3/v4 ou importados) podem não ter. Carimba uma vez, deterministicamente.
+(function ensureIds(){
+  let changed=false;
+  history.forEach(function(s,i){
+    if(!s.id){ s.id='sess_mig_'+(new Date(s.completedAt).getTime()||i)+'_'+i; changed=true; }
+  });
+  bodyweight.forEach(function(b,i){
+    if(!b.id){ b.id='bw_mig_'+(new Date(b.date).getTime()||i)+'_'+i; changed=true; }
+  });
+  if(changed) saveAll();
+})();
 
 // migrate history from older plan versions (preserve logged data only)
 (function migrate(){
@@ -1060,6 +1077,10 @@ function renderHistory(){
     +'<div class="hist-divider"></div>'
     +'<div class="hist-stat"><div class="hist-stat-val">'+fmtVol(totalVol)+'</div><div class="hist-stat-lab">VOL TOTAL KG</div></div>'
     +'</div>';
+
+  if(syncEnabled()){
+    html+='<div class="ai-status sync-status-live" style="color:var(--grav);text-align:center;margin:-6px 0 10px">'+esc(syncStatusText())+'</div>';
+  }
 
   if(history.length>0){
     html+='<button class="bw-add-btn" style="margin-bottom:8px" onclick="openAnalyze()">ANÁLISE DO PERSONAL IA</button>';
@@ -1558,6 +1579,7 @@ function finalizeWorkout(wId){
   history.push({ id:'sess_'+Date.now(), workoutId:wId, startedAt:current.startedAt, completedAt:new Date().toISOString(), exercises:done, note:(current.note||'').trim() });
   current={ workoutId:null, startedAt:null, sets:{}, note:'', swaps:{} };
   active='HIST'; saveAll(); showToast('Treino salvo no histórico'); render();
+  queueSync();
 }
 
 function resetCurrent(wId){
@@ -1570,9 +1592,10 @@ function resetCurrent(wId){
 
 function deleteSession(sessId,origIdx){
   askConfirm('Apagar este registro do histórico?', function(){
-    if(sessId) history=history.filter(h=>h.id!==sessId);
-    else history.splice(origIdx,1);
+    if(sessId){ markDeleted(sessId); history=history.filter(h=>h.id!==sessId); }
+    else { const s=history[origIdx]; if(s&&s.id) markDeleted(s.id); history.splice(origIdx,1); }
     saveAll(); render();
+    queueSync();
   }, 'Apagar');
 }
 
@@ -1602,6 +1625,8 @@ function saveBw(){
   if(w<=0){ showToast('Peso inválido'); return; }
   const today=new Date(); today.setHours(12,0,0,0);
   const todayStr=today.toISOString().slice(0,10);
+  // registro do mesmo dia é substituído: a versão antiga vira lápide pra não voltar via sync
+  bodyweight.filter(b=>b.date.slice(0,10)===todayStr).forEach(b=>{ if(b.id) markDeleted(b.id); });
   bodyweight=bodyweight.filter(b=>b.date.slice(0,10)!==todayStr);
   const entry={ id:'bw_'+Date.now(), date:today.toISOString(), weight:w };
   if(bf>0) entry.bf=bf;
@@ -1610,11 +1635,14 @@ function saveBw(){
   if(visc>0) entry.visc=visc;
   bodyweight.push(entry);
   saveAll(); closeAllSheets(); render(); showToast('Medidas registradas');
+  queueSync();
 }
 function deleteBw(id){
   askConfirm('Apagar este registro?', function(){
+    markDeleted(id);
     bodyweight=bodyweight.filter(b=>b.id!==id);
     saveAll(); render();
+    queueSync();
   }, 'Apagar');
 }
 
@@ -1666,7 +1694,10 @@ function doImport(){
   askConfirm('Substituir seus dados atuais pelos do backup?', function(){
     history=obj.history;
     bodyweight=Array.isArray(obj.bodyweight)?obj.bodyweight:[];
+    history.forEach(function(s,i){ if(!s.id) s.id='sess_mig_'+(new Date(s.completedAt).getTime()||i)+'_'+i; });
+    bodyweight.forEach(function(b,i){ if(!b.id) b.id='bw_mig_'+(new Date(b.date).getTime()||i)+'_'+i; });
     saveAll(); closeAllSheets(); active='HIST'; render(); showToast('Backup restaurado');
+    queueSync();
   }, 'Substituir');
 }
 
@@ -1688,7 +1719,11 @@ let aiSiteProxy=false;
   if(location.protocol.indexOf('http')!==0) return;
   if(/\.github\.io$/.test(location.hostname)) return; // GitHub Pages não tem functions
   fetch('/api/messages',{method:'GET'}).then(function(r){
-    if(r.status===405){ aiSiteProxy=true; if(active==='GUIA') render(); }
+    if(r.status===405){
+      aiSiteProxy=true;
+      if(active==='GUIA') render();
+      syncNow(); // primeira sincronização do boot, se o código estiver configurado
+    }
   }).catch(function(){});
 })();
 
@@ -2152,6 +2187,7 @@ async function runAnalysis(){
     const saved={ generatedAt:new Date().toISOString(), from:fromStr, data:raw };
     try{ localStorage.setItem(K_ANALYSIS, JSON.stringify(saved)); }catch(e){}
     renderAnalysisResult(saved);
+    queueSync();
   }catch(e){
     aiBusy=false;
     setAiStatus(aiErrMsg(e));
@@ -2225,11 +2261,13 @@ function applyAiPlan(){
     try{
       localStorage.setItem(K_PLAN, JSON.stringify(WORKOUTS));
       localStorage.setItem(K_PLAN_META, JSON.stringify({ generatedAt:new Date().toISOString(), resumo:aiPendingResumo }));
+      localStorage.setItem(K_PLANSTAMP, new Date().toISOString());
     }catch(e){}
     current={ workoutId:null, startedAt:null, sets:{}, note:'', swaps:{} };
     active=todayTabId(); // já cai na tela de uso do dia
     saveAll(); closeAllSheets(); render(); window.scrollTo(0,0);
     showToast('Plano novo aplicado');
+    queueSync();
   };
   if(current.workoutId && Object.values(current.sets).some(function(s){ return s.done; })){
     askConfirm('Aplicar o plano novo vai zerar o treino em andamento ('+current.workoutId+'). Continuar?', doApply, 'Aplicar');
@@ -2239,10 +2277,123 @@ function applyAiPlan(){
 function restoreDefaultPlan(){
   askConfirm('Voltar ao plano original? O plano gerado pela IA será descartado.', function(){
     WORKOUTS=DEFAULT_WORKOUTS;
-    try{ localStorage.removeItem(K_PLAN); localStorage.removeItem(K_PLAN_META); }catch(e){}
+    try{
+      localStorage.removeItem(K_PLAN); localStorage.removeItem(K_PLAN_META);
+      localStorage.setItem(K_PLANSTAMP, new Date().toISOString());
+    }catch(e){}
     if(current.workoutId) current={ workoutId:null, startedAt:null, sets:{}, note:'', swaps:{} };
     saveAll(); render(); showToast('Plano original restaurado');
+    queueSync();
   }, 'Restaurar');
+}
+
+// ============ SINCRONIZAÇÃO NA NUVEM ============
+// Histórico único e permanente: o worker guarda tudo num Durable Object e
+// cada aparelho converge pra união dos dados. Regras: itens têm id único e
+// o servidor faz união por id (aparelho atrasado nunca apaga nada); deleções
+// viram lápides (tombstones) pra não ressuscitar; plano e análise seguem
+// "timestamp mais novo vence". Requer o secret SYNC_TOKEN no worker e o
+// mesmo código colado em cada aparelho (aba GUIA).
+let tombs = loadObj(K_TOMBS) || {};
+let syncBusy = false, syncTimer = null, syncErr = '';
+
+function syncEnabled(){ return aiSiteProxy && !!(loadStr(K_SYNCTOKEN)||'').trim(); }
+function syncSaveToken(v){
+  try{ localStorage.setItem(K_SYNCTOKEN, v.trim()); }catch(e){}
+  if(v.trim()) queueSync();
+}
+function markDeleted(id){
+  if(!id) return;
+  tombs[id]=new Date().toISOString();
+  try{ localStorage.setItem(K_TOMBS, JSON.stringify(tombs)); }catch(e){}
+}
+function syncStatusText(){
+  if(syncBusy) return 'sincronizando…';
+  if(syncErr) return syncErr;
+  const last=loadStr(K_LASTSYNC);
+  if(!last) return syncEnabled()?'ainda não sincronizado':'';
+  return 'sincronizado '+fmtRelative(last)+' · '+history.length+' treinos na nuvem';
+}
+function paintSyncStatus(){
+  document.querySelectorAll('.sync-status-live').forEach(function(el){ el.textContent=syncStatusText(); });
+}
+function queueSync(){
+  if(!syncEnabled()) return;
+  clearTimeout(syncTimer);
+  syncTimer=setTimeout(syncNow, 1500);
+}
+async function syncNow(){
+  if(!syncEnabled()) return;
+  if(syncBusy){ clearTimeout(syncTimer); syncTimer=setTimeout(syncNow, 2500); return; }
+  syncBusy=true; syncErr=''; paintSyncStatus();
+  try{
+    const payload={
+      history: history,
+      bodyweight: bodyweight,
+      tomb: tombs,
+      plan: loadObj(K_PLAN),
+      planMeta: loadObj(K_PLAN_META),
+      planStamp: loadStr(K_PLANSTAMP)||'',
+      analysis: loadObj(K_ANALYSIS)
+    };
+    const resp=await fetch('/api/sync',{
+      method:'POST',
+      headers:{ 'content-type':'application/json', 'x-sync-token':(loadStr(K_SYNCTOKEN)||'').trim() },
+      body: JSON.stringify(payload)
+    });
+    if(!resp.ok){
+      let m='sync falhou (HTTP '+resp.status+')';
+      if(resp.status===401) m='código de sincronização não bate com o SYNC_TOKEN do worker';
+      try{ const j=await resp.json(); if(j.error&&j.error.message) m=j.error.message; }catch(e){}
+      throw new Error(m);
+    }
+    const data=await resp.json();
+    if(Array.isArray(data.history)) history=data.history;
+    if(Array.isArray(data.bodyweight)) bodyweight=data.bodyweight;
+    if(String(data.planStamp||'')>String(loadStr(K_PLANSTAMP)||'')){
+      try{
+        localStorage.setItem(K_PLANSTAMP, data.planStamp);
+        if(data.plan && validatePlanShape(data.plan)){
+          localStorage.setItem(K_PLAN, JSON.stringify(data.plan));
+          if(data.planMeta) localStorage.setItem(K_PLAN_META, JSON.stringify(data.planMeta));
+          WORKOUTS=data.plan;
+        } else {
+          localStorage.removeItem(K_PLAN); localStorage.removeItem(K_PLAN_META);
+          WORKOUTS=DEFAULT_WORKOUTS;
+        }
+      }catch(e){}
+    }
+    if(data.analysis){
+      const cur=loadObj(K_ANALYSIS);
+      if(!cur || String(data.analysis.generatedAt||'')>String(cur.generatedAt||'')){
+        try{ localStorage.setItem(K_ANALYSIS, JSON.stringify(data.analysis)); }catch(e){}
+      }
+    }
+    tombs={};
+    try{ localStorage.setItem(K_TOMBS,'{}'); localStorage.setItem(K_LASTSYNC, new Date().toISOString()); }catch(e){}
+    saveAll();
+    syncBusy=false;
+    render();
+  }catch(e){
+    syncBusy=false;
+    syncErr=(e&&e.message)||'sync falhou';
+    paintSyncStatus();
+  }
+}
+
+function renderSyncCard(){
+  const token=loadStr(K_SYNCTOKEN)||'';
+  let html='<div class="prog" style="margin-top:0;margin-bottom:16px"><div class="prog-label">HISTÓRICO NA NUVEM</div>';
+  if(!aiSiteProxy){
+    html+='<div style="font-size:12px;color:var(--mute)">Disponível quando o app roda no site do Cloudflare (o mesmo que guarda a chave da IA). Aqui neste endereço, os dados ficam só no aparelho — use BACKUP/IMPORTAR pra mover.</div>';
+  } else {
+    html+='<div style="font-size:12px;color:var(--mute);margin-bottom:10px">Treinos, medidas, plano e análise guardados na nuvem e sincronizados entre os aparelhos. Invente um código, salve como secret <b>SYNC_TOKEN</b> no worker e cole o mesmo código em cada aparelho.</div>';
+    html+='<input class="ai-input" type="password" autocomplete="off" placeholder="Código de sincronização (o mesmo do SYNC_TOKEN)" value="'+esc(token)+'" oninput="syncSaveToken(this.value)">';
+    html+='<button class="bw-add-btn" style="margin-bottom:8px;background:var(--grav)" onclick="syncNow()">SINCRONIZAR AGORA</button>';
+    html+='<div class="ai-status sync-status-live" style="color:var(--grav)">'+esc(syncStatusText())+'</div>';
+  }
+  html+='</div>';
+  return html;
 }
 
 function renderAiCard(){
@@ -2321,6 +2472,7 @@ function renderGuide(){
   ];
   let html='<div class="section-head"><div class="eyebrow">DIRETRIZES</div><div class="display">GUIA RÁPIDO</div></div>';
   html+=renderAiCard();
+  html+=renderSyncCard();
   html+='<div class="schedule"><div class="schedule-label">SEMANA</div><div class="schedule-grid">'
     +days.map(d=>'<div class="day '+(d.rest?'rest':'')+'"><div class="day-name">'+d.n+'</div><div class="day-code">'+(d.rest?'OFF':d.c)+'</div></div>').join('')
     +'</div></div><div style="margin-top:16px"></div>';
@@ -2387,6 +2539,7 @@ document.addEventListener('visibilitychange', function(){
     if(!restTick && Date.now()<restEndTs) restTick=setInterval(renderRest,250);
     renderRest();
   }
+  if(!document.hidden) queueSync(); // voltou pro app: puxa o que outro aparelho subiu
 });
 
 // ============ PDF EXPORT (native print → Save to PDF) ============
