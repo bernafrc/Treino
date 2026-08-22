@@ -6,6 +6,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Treino">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
 <meta name="theme-color" content="#f5f1e8">
 <title>Plano de Treino</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -43,7 +45,7 @@
     padding-top: env(safe-area-inset-top);
   }
   .display { font-family: 'Anton', sans-serif; letter-spacing: 0.02em; }
-  button { font-family: inherit; cursor: pointer; }
+  button { font-family: inherit; cursor: pointer; touch-action: manipulation; }
   input, textarea { font-family: inherit; }
 
   .topbar {
@@ -437,6 +439,40 @@
     border-radius: 10px; padding: 10px 16px; font-family: 'Anton', sans-serif;
     font-size: 14px; letter-spacing: 0.08em;
   }
+
+  /* Exercise swap */
+  .swap-btn {
+    background: var(--light); border: 1px solid var(--border);
+    border-radius: 9px; color: var(--mute); font-size: 15px;
+    padding: 7px 10px; flex-shrink: 0; line-height: 1;
+  }
+  .swap-btn:active { background: var(--border-strong); }
+  .ex.swapped { border-left: 3px solid var(--accent); }
+  .ex.graviton { border-left: 3px solid var(--grav); } /* graviton wins over swapped */
+  .swap-note {
+    font-size: 10px; color: var(--accent); font-weight: 700;
+    margin-bottom: 3px; letter-spacing: 0.02em;
+  }
+  .opt-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    width: 100%; text-align: left;
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 13px 14px; margin-bottom: 7px;
+    font-size: 13px; font-weight: 600; color: var(--ink);
+  }
+  .opt-row:active { background: var(--light); }
+  .opt-row.sel { border-color: var(--accent); background: var(--accent-soft); }
+  .opt-tag { font-size: 9px; letter-spacing: 0.12em; font-weight: 800; color: var(--faint); flex-shrink: 0; }
+  .opt-row.sel .opt-tag { color: var(--accent); }
+
+  /* AI engine */
+  .ai-input {
+    width: 100%; border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px; font-size: 13px; background: var(--card); color: var(--ink);
+    outline: none; margin-bottom: 8px;
+  }
+  .ai-input:focus { border-color: var(--accent); }
+  .ai-status { font-size: 12px; color: var(--accent); font-weight: 600; min-height: 16px; }
 </style>
 </head>
 <body>
@@ -595,6 +631,19 @@
   </div>
 </div>
 
+<!-- Exercise swap sheet: pick a similar alternative for today only -->
+<div class="sheet" id="swap-sheet">
+  <div class="sheet-handle"></div>
+  <div class="sheet-head">
+    <div class="sheet-eyebrow">TROCAR EXERCÍCIO · SÓ HOJE</div>
+    <div class="sheet-title" id="swap-title"></div>
+  </div>
+  <div id="swap-body"></div>
+  <div class="sheet-actions" style="margin-top:12px">
+    <button class="btn btn-secondary" onclick="closeAllSheets()">Fechar</button>
+  </div>
+</div>
+
 <!-- Rest banner: clock-based, survives leaving the app -->
 <div class="rest-banner" id="rest-banner">
   <div class="rest-left">
@@ -608,95 +657,138 @@
 
 <script>
 // ============ PLANO ============
-const WORKOUTS = {
+// Programa de 22/08/2026, montado a partir da análise das 36 sessões (mai-ago):
+// 7 dias com quarta = Pernas A, dois dias de perna de verdade, braço concentrado
+// na quinta, abdômen 2x (SEG/QUI), panturrilha 2x (QUA/DOM). Nomes mantidos
+// iguais aos do histórico para preservar recordes e prefill.
+// alts: alternativas equivalentes para trocar na hora (academia cheia, máquina
+// ocupada). String simples = exercício normal; objeto {name, graviton:true}
+// quando a alternativa é assistida (peso = ajuda).
+const DEFAULT_WORKOUTS = {
   SEG: {
     title: 'PEITO + TRÍCEPS', sub: 'SEGUNDA', day: '+ ABDÔMEN',
     exercises: [
-      { name: 'Supino inclinado halter (30°)', sets: 4, reps: '8-10' },
-      { name: 'Supino reto máquina/barra', sets: 3, reps: '8-10' },
-      { name: 'Crucifixo máquina/crossover', sets: 3, reps: '12-15' },
-      { name: 'Tríceps pulley', sets: 3, reps: '10-12' },
-      { name: 'Tríceps francês corda', sets: 3, reps: '10-12' },
-      { name: 'Abdômen máquina/polia', sets: 4, reps: '15-20', finisher: true },
+      { name: 'Supino inclinado halter (30°)', sets: 4, reps: '8-12',
+        alts: ['Supino inclinado barra','Supino inclinado máquina','Supino inclinado smith','Crossover baixo p/ cima','Flexão com pés elevados'] },
+      { name: 'Supino reto máquina/barra', sets: 3, reps: '8-12',
+        alts: ['Supino reto halter','Supino reto barra','Supino reto smith',{name:'Paralelas (graviton)',graviton:true},'Flexão de braço'] },
+      { name: 'Crucifixo máquina/crossover', sets: 3, reps: '10-15',
+        alts: ['Crucifixo halter banco reto','Peck deck','Crossover polia média','Crucifixo inclinado halter','Crossover alto p/ baixo'] },
+      { name: 'Tríceps pulley', sets: 3, reps: '10-15',
+        alts: ['Tríceps pulley barra V','Tríceps máquina','Tríceps testa barra W','Tríceps francês halter','Mergulho no banco'] },
+      { name: 'Tríceps francês corda', sets: 3, reps: '10-12',
+        alts: ['Tríceps francês halter 2 mãos','Tríceps testa corda','Tríceps coice halter','Tríceps unilateral polia',{name:'Paralelas (graviton)',graviton:true}] },
+      { name: 'Abdômen máquina/polia', sets: 4, reps: '10-15', finisher: true,
+        alts: ['Crunch com anilha','Abdômen infra no banco','Crunch polia alta','Elevação de pernas','Abdômen oblíquo polia'] },
     ],
   },
   TER: {
-    title: 'COSTAS + BÍCEPS', sub: 'TERÇA', day: '+ PANTURRILHA',
+    title: 'COSTAS + BÍCEPS', sub: 'TERÇA', day: '',
     exercises: [
-      { name: 'Barra fixa (graviton)', sets: 4, reps: '8-10', graviton: true },
-      { name: 'Remada máquina apoiada', sets: 4, reps: '8-10' },
-      { name: 'Remada baixa triângulo', sets: 3, reps: '10-12' },
-      { name: 'Rosca direta', sets: 3, reps: '10-12' },
-      { name: 'Rosca inclinada', sets: 3, reps: '10-12' },
-      { name: 'Panturrilha em pé', sets: 4, reps: '15-20', finisher: true },
+      { name: 'Barra fixa (graviton)', sets: 4, reps: '6-10', graviton: true,
+        alts: ['Puxada alta aberta','Puxada neutra máquina','Puxada supinada','Barra fixa livre','Puxada máquina articulada'] },
+      { name: 'Remada máquina apoiada', sets: 4, reps: '8-12',
+        alts: ['Remada curvada barra','Remada halter unilateral','Remada cavalinho','Remada baixa polia','Remada T máquina'] },
+      { name: 'Remada baixa triângulo', sets: 3, reps: '8-12',
+        alts: ['Remada baixa barra reta','Remada máquina neutra','Remada halter banco inclinado','Puxada fechada supinada','Remada polia unilateral'] },
+      { name: 'Rosca direta', sets: 3, reps: '8-12',
+        alts: ['Rosca direta barra W','Rosca alternada halter','Rosca polia baixa','Rosca máquina','Rosca 21'] },
+      { name: 'Rosca inclinada', sets: 3, reps: '8-10',
+        alts: ['Rosca banco 45° halter','Rosca concentrada','Rosca spider','Rosca bayesian polia','Rosca martelo inclinada'] },
+    ],
+  },
+  QUA: {
+    title: 'PERNAS A · QUADRÍCEPS', sub: 'QUARTA', day: '+ PANTURRILHA',
+    exercises: [
+      { name: 'Agachamento', sets: 4, reps: '6-10',
+        alts: ['Agachamento smith','Agachamento hack','Leg press 45','Agachamento búlgaro halter','Agachamento goblet'] },
+      { name: 'Leg press', sets: 4, reps: '8-12',
+        alts: ['Leg press horizontal','Agachamento hack','Agachamento smith','Agachamento búlgaro halter','Passada com halter'] },
+      { name: 'Extensora', sets: 3, reps: '10-15',
+        alts: ['Extensora unilateral','Agachamento sissy','Leg press pés baixos','Afundo no smith','Agachamento hack pés baixos'] },
+      { name: 'Panturrilha em pé', sets: 4, reps: '10-15', finisher: true,
+        alts: ['Panturrilha máquina em pé','Panturrilha no leg press','Panturrilha no smith','Panturrilha unilateral halter','Panturrilha sentado'] },
     ],
   },
   QUI: {
-    title: 'BRAÇOS + POSTERIOR', sub: 'QUINTA', day: '+ ABDÔMEN',
+    title: 'BRAÇOS', sub: 'QUINTA', day: '+ ABDÔMEN',
     exercises: [
-      { name: 'Rosca direta barra W', sets: 4, reps: '8-10' },
-      { name: 'Rosca martelo', sets: 3, reps: '10-12' },
-      { name: 'Rosca Scott/máquina', sets: 3, reps: '10-12' },
-      { name: 'Tríceps corda', sets: 4, reps: '10-12' },
-      { name: 'Tríceps testa corda', sets: 3, reps: '10-12' },
-      { name: 'Mesa flexora', sets: 4, reps: '10-12' },
-      { name: 'Stiff leve', sets: 3, reps: '12' },
-      { name: 'Abdômen infra/polia', sets: 4, reps: '15-20', finisher: true },
+      { name: 'Rosca direta barra W', sets: 4, reps: '8-12',
+        alts: ['Rosca direta barra reta','Rosca halter em pé','Rosca polia barra reta','Rosca máquina','Rosca alternada'] },
+      { name: 'Rosca martelo', sets: 3, reps: '8-12',
+        alts: ['Rosca martelo corda polia','Rosca martelo alternada','Rosca martelo banco inclinado','Rosca inversa barra','Rosca cross-body'] },
+      { name: 'Rosca Scott/máquina', sets: 3, reps: '10-15',
+        alts: ['Rosca Scott barra W','Rosca Scott halter unilateral','Rosca máquina','Rosca spider halter','Rosca concentrada'] },
+      { name: 'Tríceps corda', sets: 4, reps: '10-12',
+        alts: ['Tríceps pulley barra','Tríceps máquina','Tríceps francês corda','Tríceps unilateral polia','Mergulho no banco'] },
+      { name: 'Tríceps testa corda', sets: 3, reps: '10-12',
+        alts: ['Tríceps testa barra W','Tríceps testa halter','Tríceps francês polia','Tríceps overhead corda',{name:'Paralelas (graviton)',graviton:true}] },
+      { name: 'Abdômen infra/polia', sets: 4, reps: '12-15', finisher: true,
+        alts: ['Elevação de pernas banco declinado','Infra na paralela','Crunch polia alta','Abdômen máquina','Elevação de joelhos suspenso'] },
     ],
   },
   SEX: {
-    title: 'OMBROS', sub: 'SEXTA', day: '+ PANTURRILHA',
+    title: 'OMBROS', sub: 'SEXTA', day: 'DIA CURTO',
     exercises: [
-      { name: 'Desenvolvimento halter', sets: 4, reps: '8-10' },
-      { name: 'Elevação lateral', sets: 4, reps: '12-15' },
-      { name: 'Elevação lateral unilateral polia', sets: 3, reps: '12-15' },
-      { name: 'Crucifixo inverso máquina', sets: 4, reps: '12-15' },
-      { name: 'Facepull', sets: 3, reps: '12-15' },
-      { name: 'Panturrilha em pé', sets: 4, reps: '15-20', finisher: true },
+      { name: 'Desenvolvimento halter', sets: 4, reps: '8-12',
+        alts: ['Desenvolvimento máquina','Desenvolvimento barra sentado','Desenvolvimento smith','Desenvolvimento Arnold','Desenvolvimento em pé barra'] },
+      { name: 'Elevação lateral', sets: 4, reps: '10-15',
+        alts: ['Elevação lateral polia','Elevação lateral máquina','Elevação lateral sentado','Elevação lateral inclinado','Remada alta halter'] },
+      { name: 'Crucifixo inverso máquina', sets: 4, reps: '12-15',
+        alts: ['Crucifixo inverso halter inclinado','Crossover invertido polia alta','Face pull corda','Crucifixo inverso banco 30°','Remada alta aberta'] },
+      { name: 'Facepull', sets: 3, reps: '12-15',
+        alts: ['Face pull corda polia alta','Crucifixo inverso polia','Remada alta corda','W-raise banco inclinado','Crucifixo inverso máquina'] },
     ],
   },
   SAB: {
-    title: 'PEITO + COSTAS', sub: 'SÁBADO', day: '+ ABDÔMEN',
+    title: 'PEITO + COSTAS', sub: 'SÁBADO', day: '2ª FREQUÊNCIA',
     exercises: [
-      { name: 'Supino inclinado máquina', sets: 4, reps: '10-12' },
-      { name: 'Supino reto halter', sets: 3, reps: '10-12' },
-      { name: 'Crossover', sets: 3, reps: '12-15' },
-      { name: 'Barra fixa (graviton)', sets: 4, reps: '6-10', graviton: true },
-      { name: 'Remada unilateral', sets: 4, reps: '10-12' },
-      { name: 'Pulldown corda', sets: 3, reps: '12-15' },
-      { name: 'Abdômen infra', sets: 4, reps: '15-20', finisher: true },
+      { name: 'Supino inclinado máquina', sets: 4, reps: '8-12',
+        alts: ['Supino inclinado halter','Supino inclinado barra','Supino inclinado smith','Crossover baixo p/ cima','Flexão com pés elevados'] },
+      { name: 'Supino reto halter', sets: 3, reps: '8-12',
+        alts: ['Supino reto barra','Supino reto máquina','Supino reto smith','Flexão de braço',{name:'Paralelas (graviton)',graviton:true}] },
+      { name: 'Crossover', sets: 3, reps: '10-15',
+        alts: ['Peck deck','Crucifixo halter','Crossover polia baixa','Crossover unilateral','Crucifixo inclinado halter'] },
+      { name: 'Barra fixa (graviton)', sets: 3, reps: '8-10', graviton: true,
+        alts: ['Puxada alta aberta','Puxada neutra máquina','Puxada supinada','Barra fixa livre','Puxada máquina articulada'] },
+      { name: 'Remada unilateral', sets: 3, reps: '8-12',
+        alts: ['Remada halter unilateral banco','Remada máquina unilateral','Remada baixa unilateral polia','Remada curvada barra','Remada cavalinho'] },
+      { name: 'Pulldown corda', sets: 3, reps: '12-15',
+        alts: ['Pulldown barra reta','Pullover halter banco','Puxada neutra','Pulldown unilateral polia','Puxada supinada'] },
     ],
   },
   DOM: {
-    title: 'PERNAS', sub: 'DOMINGO', day: '+ PANTURRILHA',
+    title: 'PERNAS B · POSTERIOR', sub: 'DOMINGO', day: '+ PANTURRILHA',
     exercises: [
-      { name: 'Agachamento', sets: 4, reps: '6-10' },
-      { name: 'Leg press', sets: 4, reps: '10-12' },
-      { name: 'Stiff controlado', sets: 3, reps: '8-10' },
-      { name: 'Mesa flexora', sets: 3, reps: '10-12' },
-      { name: 'Extensora', sets: 3, reps: '12-15' },
-      { name: 'Panturrilha sentado', sets: 4, reps: '15-20', finisher: true },
+      { name: 'Stiff controlado', sets: 4, reps: '8-10',
+        alts: ['Stiff halter','Terra romeno barra','Bom dia barra','Stiff no smith','Flexora sentada'] },
+      { name: 'Mesa flexora', sets: 4, reps: '8-12',
+        alts: ['Flexora sentada','Flexora em pé unilateral','Stiff halter','Nordic assistido','Bom dia barra'] },
+      { name: 'Agachamento búlgaro halter', sets: 3, reps: '8-10',
+        alts: ['Elevação pélvica barra','Afundo no smith','Passada com halter','Leg press unilateral','Agachamento sumô halter'] },
+      { name: 'Panturrilha sentado', sets: 4, reps: '15-20', finisher: true,
+        alts: ['Panturrilha em pé máquina','Panturrilha no leg press','Panturrilha no smith','Panturrilha unilateral halter','Panturrilha burrinho'] },
     ],
   },
 };
 
-const TABS = [
-  { id: 'SEG', label: 'SEG' }, { id: 'TER', label: 'TER' },
-  { id: 'QUI', label: 'QUI' }, { id: 'SEX', label: 'SEX' },
-  { id: 'SAB', label: 'SÁB' }, { id: 'DOM', label: 'DOM' },
-  { id: 'HIST', label: 'HIST' }, { id: 'CORPO', label: 'CORPO' },
-  { id: 'GUIA', label: 'GUIA' },
-];
+// Abas de dia derivadas do plano ativo: QUA só aparece se o plano tiver treino nela.
+function tabsList(){
+  const dayTabs=PLAN_DAYS.filter(k=>WORKOUTS[k]).map(k=>({ id:k, label:k==='SAB'?'SÁB':k }));
+  return dayTabs.concat([{id:'HIST',label:'HIST'},{id:'CORPO',label:'CORPO'},{id:'GUIA',label:'GUIA'}]);
+}
 
 const GRAVITON_NAMES = new Set(
-  Object.values(WORKOUTS).flatMap(w => w.exercises.filter(e => e.graviton).map(e => e.name))
+  Object.values(DEFAULT_WORKOUTS).flatMap(w => w.exercises.filter(e => e.graviton).map(e => e.name))
 );
 
 // Rest seconds by exercise. Heavy compounds rest most, finishers least.
+// Exercises may carry their own `rest` (AI-generated plans do); that wins.
 const REST_120 = ['Agachamento','Leg press','Barra fixa (graviton)'];
-const REST_90 = ['Supino inclinado halter (30°)','Supino reto máquina/barra','Supino inclinado máquina','Supino reto halter','Desenvolvimento halter','Remada máquina apoiada','Remada unilateral','Remada baixa triângulo','Stiff controlado','Mesa flexora'];
+const REST_90 = ['Supino inclinado halter (30°)','Supino reto máquina/barra','Supino inclinado máquina','Supino reto halter','Desenvolvimento halter','Remada máquina apoiada','Remada unilateral','Remada baixa triângulo','Stiff controlado','Mesa flexora','Agachamento búlgaro halter'];
 const REST_45_FIN = ['Abdômen máquina/polia','Abdômen infra/polia','Abdômen infra','Panturrilha em pé','Panturrilha sentado'];
 function restSecondsFor(ex){
+  if(typeof ex.rest==='number' && ex.rest>=15) return Math.min(300,Math.round(ex.rest));
   if(ex.finisher || REST_45_FIN.includes(ex.name)) return 45;
   if(REST_120.includes(ex.name)) return 120;
   if(REST_90.includes(ex.name)) return 90;
@@ -707,16 +799,40 @@ const K_CURRENT = 'wo_current_v5';
 const K_HISTORY = 'wo_history_v5';
 const K_ACTIVE = 'wo_active_v5';
 const K_BW = 'wo_bodyweight_v5';
+const K_PLAN = 'wo_plan_v1';        // plano customizado (gerado pela IA)
+const K_PLAN_META = 'wo_plan_meta_v1';
+const K_APIKEY = 'wo_apikey_v1';    // modo direto (fallback); com proxy configurado fica vazio
+const K_AIINST = 'wo_aiinst_v1';
+const K_PROXY = 'wo_proxy_v1';      // URL do proxy que guarda a chave (Cloudflare Worker)
 
 function loadStr(k){ try{return localStorage.getItem(k);}catch(e){return null;} }
 function loadObj(k){ try{const v=localStorage.getItem(k); return v?JSON.parse(v):null;}catch(e){return null;} }
 
+const PLAN_SUBS = { SEG:'SEGUNDA', TER:'TERÇA', QUA:'QUARTA', QUI:'QUINTA', SEX:'SEXTA', SAB:'SÁBADO', DOM:'DOMINGO' };
+const PLAN_DAYS = ['SEG','TER','QUA','QUI','SEX','SAB','DOM']; // QUA é opcional no plano
+const PLAN_REQUIRED = ['SEG','TER','QUI','SEX','SAB','DOM'];
+function validDay(d){
+  return d && typeof d.title==='string'
+    && Array.isArray(d.exercises) && d.exercises.length>0
+    && d.exercises.every(e => e && typeof e.name==='string' && e.sets>0);
+}
+function validatePlanShape(p){
+  return !!p && PLAN_REQUIRED.every(k => validDay(p[k])) && (!p.QUA || validDay(p.QUA));
+}
+// WORKOUTS é o plano ativo: o gerado pela IA se houver um válido salvo, senão o original.
+let WORKOUTS = (function(){
+  const p = loadObj(K_PLAN);
+  return validatePlanShape(p) ? p : DEFAULT_WORKOUTS;
+})();
+
 let active = loadStr(K_ACTIVE) || 'SEG';
-let current = loadObj(K_CURRENT) || { workoutId: null, startedAt: null, sets: {}, note: '' };
+let current = loadObj(K_CURRENT) || { workoutId: null, startedAt: null, sets: {}, note: '', swaps: {} };
 if (!current.hasOwnProperty('note')) current.note = '';
+if (!current.swaps) current.swaps = {};
 let history = loadObj(K_HISTORY) || [];
 let bodyweight = loadObj(K_BW) || [];
 let activeSetCtx = null;
+let activeSwapCtx = null;
 
 // migrate history from older plan versions (preserve logged data only)
 (function migrate(){
@@ -745,6 +861,15 @@ function saveAll(){
 }
 
 // ============ HELPERS ============
+function normAlt(a){ return typeof a==='string' ? {name:a} : a; }
+// Exercício efetivo do slot: o do plano, ou o substituto escolhido hoje.
+// A troca vive em current.swaps e morre quando o treino é finalizado/zerado.
+function effEx(wId, idx){
+  const base = WORKOUTS[wId].exercises[idx];
+  const sw = (current.workoutId===wId && current.swaps) ? current.swaps[idx] : null;
+  if(!sw) return base;
+  return Object.assign({}, base, { name: sw.name, graviton: !!sw.graviton, swapped: true, plannedName: base.name });
+}
 function setKey(ex,set){ return ex+'_'+set; }
 function getSet(ex,set){ return current.sets[setKey(ex,set)] || null; }
 function isDone(ex,set){ const s=getSet(ex,set); return s && s.done; }
@@ -802,6 +927,8 @@ function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').rep
 
 // ============ RENDER ============
 function render(){
+  // aba de dia que não existe no plano ativo (ex: QUA depois de restaurar plano de 6 dias)
+  if(active!=='HIST'&&active!=='CORPO'&&active!=='GUIA'&&!WORKOUTS[active]) active='SEG';
   renderTabs();
   renderStats();
   const c = document.getElementById('content');
@@ -811,7 +938,7 @@ function render(){
   else { c.innerHTML=renderWorkout(active); }
 }
 function renderTabs(){
-  document.getElementById('tabs').innerHTML = TABS.map(t=>
+  document.getElementById('tabs').innerHTML = tabsList().map(t=>
     '<button class="tab '+(active===t.id?'active':'')+'" onclick="setActive(\''+t.id+'\')">'+t.label+'</button>'
   ).join('');
 }
@@ -854,15 +981,19 @@ function renderExerciseCard(wId,ex,i,isCurrent){
     if(max>0) recBadge='<span class="pr-badge">REC '+fmtWeight(max)+'KG</span>';
   }
   const gravTag=ex.graviton?'<span class="dot"></span><span class="grav-tag">peso = ajuda</span>':'';
-  const cls=(allDone?'done ':'')+(ex.finisher?'finisher ':'')+(ex.graviton?'graviton':'');
+  const cls=(allDone?'done ':'')+(ex.finisher?'finisher ':'')+(ex.swapped?'swapped ':'')+(ex.graviton?'graviton':'');
+  const swapNote=ex.swapped?'<div class="swap-note">no lugar de: '+esc(ex.plannedName)+'</div>':'';
+  const hasAlts=(WORKOUTS[wId].exercises[i].alts||[]).length>0;
+  const swapBtn=hasAlts?'<button class="swap-btn" onclick="openSwap(\''+wId+'\','+i+')" aria-label="Trocar exercício">⇄</button>':'';
 
   return '<div class="ex '+cls+'" style="animation-delay:'+(i*25)+'ms">'
     +'<div class="ex-head"><div class="ex-num">'+String(i+1).padStart(2,'0')+'</div>'
     +'<div class="ex-body">'
     +'<button class="ex-name-btn" onclick="openProgress(\''+encodeURIComponent(ex.name)+'\','+(ex.graviton?'true':'false')+')">'
     +esc(ex.name)+recBadge+'<span class="chart-icon">📈</span></button>'
-    +'<div class="ex-meta"><span><span class="pill">'+ex.sets+'</span> séries</span><span class="dot"></span><span>'+ex.reps+' reps</span>'+gravTag+'</div>'
-    +'</div></div>'
+    +swapNote
+    +'<div class="ex-meta"><span><span class="pill">'+ex.sets+'</span> séries</span><span class="dot"></span><span>'+esc(ex.reps)+' reps</span>'+gravTag+'</div>'
+    +'</div>'+swapBtn+'</div>'
     +lastLine
     +'<div class="sets">'+setsHtml+'</div>'
     +'</div>';
@@ -871,26 +1002,24 @@ function renderExerciseCard(wId,ex,i,isCurrent){
 function renderWorkout(wId){
   const w=WORKOUTS[wId];
   const isCurrent=current.workoutId===wId;
-  let html='<div class="section-head"><div class="eyebrow">'+w.sub+'</div><div class="display">'+w.title+'</div><div class="day-tag">'+w.day+'</div></div>';
+  let html='<div class="section-head"><div class="eyebrow">'+esc(w.sub)+'</div><div class="display">'+esc(w.title)+'</div>'+(w.day?'<div class="day-tag">'+esc(w.day)+'</div>':'')+'</div>';
 
-  if(wId==='SEX'){
+  if(wId==='SAB'){
     html+='<div class="bioimp-card" onclick="setActive(\'CORPO\')">'
-      +'<div><div class="bioimp-title">Sexta é dia de bioimpedância</div>'
+      +'<div><div class="bioimp-title">Sábado: pesagem em jejum</div>'
       +'<div class="bioimp-sub">Toque para registrar peso, %gordura, %massa magra</div></div>'
       +'<div class="bioimp-go">›</div></div>';
   }
 
-  const mainEx=w.exercises.filter(e=>!e.finisher);
   const finisherEx=w.exercises.filter(e=>e.finisher);
-  const fStart=mainEx.length;
 
-  mainEx.forEach((ex,i)=>{ html+=renderExerciseCard(wId,ex,i,isCurrent); });
+  w.exercises.forEach((ex0,i)=>{ if(!ex0.finisher) html+=renderExerciseCard(wId,effEx(wId,i),i,isCurrent); });
 
   if(finisherEx.length>0){
     const fname=finisherEx[0].name.toLowerCase();
     const label=fname.includes('panturrilha')?'PANTURRILHA':'ABDÔMEN';
     html+='<div class="group-divider"><div class="line"></div><div class="label">'+label+'</div><div class="line"></div></div>';
-    finisherEx.forEach((ex,i)=>{ html+=renderExerciseCard(wId,ex,fStart+i,isCurrent); });
+    w.exercises.forEach((ex0,i)=>{ if(ex0.finisher) html+=renderExerciseCard(wId,effEx(wId,i),i,isCurrent); });
   }
 
   const c=completion(wId);
@@ -970,7 +1099,7 @@ function renderHistory(){
 
     html+='<div class="session">'
       +'<div class="session-head"><div><span class="session-code">'+sess.workoutId+'</span>'
-      +'<span style="font-size:11px;color:var(--mute);margin-left:8px;font-weight:600">'+(w?w.title:'')+'</span></div>'
+      +'<span style="font-size:11px;color:var(--mute);margin-left:8px;font-weight:600">'+(w?esc(w.title):'')+'</span></div>'
       +'<div class="session-date">'+fmtDate(sess.completedAt)+'</div></div>'
       +'<div class="session-volume"><span class="session-vol-main">'+fmtVol(vol)+'</span><span class="session-vol-sub">KG VOLUME</span>'+deltaHtml+'</div>'
       +'<div class="session-meta">'+sess.exercises.length+' exercícios · '+totalSets+' séries</div>'
@@ -1132,8 +1261,7 @@ function openProgress(encName, graviton){
   progState={ name, graviton: graviton===true || graviton==='true', metric: (graviton===true||graviton==='true')?'help':'vol' };
   document.getElementById('prog-title').textContent=name;
   renderProgressBody();
-  document.getElementById('scrim').classList.add('show');
-  document.getElementById('prog-sheet').classList.add('show');
+  openSheetById('prog-sheet');
 }
 
 function setProgMetric(m){ progState.metric=m; renderProgressBody(); }
@@ -1211,23 +1339,77 @@ function renderProgressBody(){
 }
 
 // ============ SET MODAL ============
-function openSet(wId,exIdx,setIdx){
+// Garante que wId é o treino em andamento (confirma se outro estiver no meio),
+// depois executa `then`. Usado por marcar série e por trocar exercício.
+function claimWorkout(wId, then){
   if(current.workoutId!==wId){
     if(current.workoutId && Object.values(current.sets).some(s=>s.done)){
       askConfirm('Você tem séries não finalizadas no treino '+current.workoutId+'. Trocar para '+wId+' vai zerar o atual. Continuar?', function(){
-        current={ workoutId:wId, startedAt:new Date().toISOString(), sets:{}, note:'' };
+        current={ workoutId:wId, startedAt:new Date().toISOString(), sets:{}, note:'', swaps:{} };
         saveAll(); render();
-        _openSetSheet(wId,exIdx,setIdx);
+        then();
       }, 'Trocar');
       return;
     }
-    current={ workoutId:wId, startedAt:new Date().toISOString(), sets:{}, note:'' };
+    current={ workoutId:wId, startedAt:new Date().toISOString(), sets:{}, note:'', swaps:{} };
   }
-  _openSetSheet(wId,exIdx,setIdx);
+  then();
+}
+
+function openSet(wId,exIdx,setIdx){
+  claimWorkout(wId, function(){ _openSetSheet(wId,exIdx,setIdx); });
+}
+
+// ============ TROCA DE EXERCÍCIO (rollbox) ============
+function openSwap(wId,exIdx){
+  claimWorkout(wId, function(){
+    activeSwapCtx={ wId, exIdx };
+    renderSwapBody();
+    openSheetById('swap-sheet');
+  });
+}
+
+function renderSwapBody(){
+  const ctx=activeSwapCtx; if(!ctx) return;
+  const base=WORKOUTS[ctx.wId].exercises[ctx.exIdx];
+  const cur=(current.workoutId===ctx.wId && current.swaps)?current.swaps[ctx.exIdx]:null;
+  document.getElementById('swap-title').textContent=base.name;
+  const alts=(base.alts||[]).map(normAlt);
+  const mk=function(name,grav,tag,sel,idx){
+    return '<button class="opt-row '+(sel?'sel':'')+'" onclick="applySwap('+idx+')">'
+      +'<span>'+esc(name)+(grav?' <span class="grav-tag">(peso = ajuda)</span>':'')+'</span>'
+      +(tag?'<span class="opt-tag">'+tag+'</span>':'')
+      +'</button>';
+  };
+  let html=mk(base.name,!!base.graviton,'DO PLANO',!cur,-1);
+  alts.forEach(function(a,i){ html+=mk(a.name,!!a.graviton,'',!!(cur&&cur.name===a.name),i); });
+  document.getElementById('swap-body').innerHTML=html;
+}
+
+function applySwap(altIdx){
+  const ctx=activeSwapCtx; if(!ctx) return;
+  const base=WORKOUTS[ctx.wId].exercises[ctx.exIdx];
+  const alts=(base.alts||[]).map(normAlt);
+  const target=altIdx<0?null:alts[altIdx];
+  if(altIdx>=0 && !target) return;
+  const doIt=function(){
+    if(!current.swaps) current.swaps={};
+    if(target) current.swaps[ctx.exIdx]={ name:target.name, graviton:!!target.graviton };
+    else delete current.swaps[ctx.exIdx];
+    saveAll(); closeAllSheets(); render();
+    showToast(target?('Hoje: '+target.name):('De volta: '+base.name));
+  };
+  let hasLogged=false;
+  for(let s=0;s<base.sets;s++) if(isDone(ctx.exIdx,s)) { hasLogged=true; break; }
+  const curSwap=current.swaps?current.swaps[ctx.exIdx]:null;
+  const changing=(target?target.name:base.name)!==(curSwap?curSwap.name:base.name);
+  if(hasLogged && changing){
+    askConfirm('Você já marcou séries neste exercício hoje. Elas vão contar para "'+(target?target.name:base.name)+'". Continuar?', doIt, 'Trocar');
+  } else doIt();
 }
 
 function _openSetSheet(wId,exIdx,setIdx){
-  const ex=WORKOUTS[wId].exercises[exIdx];
+  const ex=effEx(wId,exIdx);
   activeSetCtx={ exIdx, setIdx, exName:ex.name, totalSets:ex.sets, graviton:!!ex.graviton };
 
   document.getElementById('sheet-eyebrow').textContent=ex.name.toUpperCase()+' · SÉRIE '+(setIdx+1)+'/'+ex.sets;
@@ -1259,10 +1441,17 @@ function _openSetSheet(wId,exIdx,setIdx){
     prev.style.display='flex';
   } else prev.style.display='none';
 
-  document.getElementById('scrim').classList.add('show');
-  document.getElementById('sheet').classList.add('show');
+  openSheetById('sheet');
 }
 
+// Opening a sheet on iOS can shift the page scroll (keyboard focus in a fixed
+// element). Remember where the user was and put them back on close.
+let _sheetScrollY=null;
+function openSheetById(id){
+  if(_sheetScrollY===null) _sheetScrollY=window.scrollY||window.pageYOffset||0;
+  document.getElementById('scrim').classList.add('show');
+  document.getElementById(id).classList.add('show');
+}
 function closeAllSheets(){
   document.getElementById('scrim').classList.remove('show');
   document.getElementById('sheet').classList.remove('show');
@@ -1270,8 +1459,18 @@ function closeAllSheets(){
   document.getElementById('bw-sheet').classList.remove('show');
   document.getElementById('backup-sheet').classList.remove('show');
   document.getElementById('confirm-sheet').classList.remove('show');
+  document.getElementById('swap-sheet').classList.remove('show');
   activeSetCtx=null;
+  activeSwapCtx=null;
+  if(_sheetScrollY!==null){ const y=_sheetScrollY; _sheetScrollY=null; window.scrollTo(0,y); }
 }
+
+// Steppers (+/-) must not steal focus from the number input: on iOS the
+// blur closes the keyboard and throws the page scroll around. Preventing
+// mousedown keeps focus where it is; the click still fires.
+document.addEventListener('mousedown', function(e){
+  if(e.target && e.target.closest && e.target.closest('.stepper')) e.preventDefault();
+}, true);
 
 // Custom confirm that works where native confirm() is blocked (sandboxed previews)
 let _confirmCb=null;
@@ -1279,8 +1478,7 @@ function askConfirm(msg, onYes, yesLabel){
   _confirmCb=onYes;
   document.getElementById('confirm-msg').textContent=msg;
   document.getElementById('confirm-yes-btn').textContent=yesLabel||'Confirmar';
-  document.getElementById('scrim').classList.add('show');
-  document.getElementById('confirm-sheet').classList.add('show');
+  openSheetById('confirm-sheet');
 }
 function confirmYes(){
   const cb=_confirmCb; _confirmCb=null;
@@ -1346,18 +1544,19 @@ function finalizeWorkout(wId){
   w.exercises.forEach((ex,i)=>{
     const sets=[];
     for(let s=0;s<ex.sets;s++){ const d=getSet(i,s); if(d&&d.done) sets.push({weight:d.weight,reps:d.reps}); }
-    if(sets.length>0) done.push({name:ex.name,sets});
+    // salva com o nome do exercício realmente feito (troca do dia, se houver)
+    if(sets.length>0) done.push({name:effEx(wId,i).name,sets});
   });
   if(done.length===0){ showToast('Nada para finalizar ainda'); return; }
   history.push({ id:'sess_'+Date.now(), workoutId:wId, startedAt:current.startedAt, completedAt:new Date().toISOString(), exercises:done, note:(current.note||'').trim() });
-  current={ workoutId:null, startedAt:null, sets:{}, note:'' };
+  current={ workoutId:null, startedAt:null, sets:{}, note:'', swaps:{} };
   active='HIST'; saveAll(); showToast('Treino salvo no histórico'); render();
 }
 
 function resetCurrent(wId){
   if(current.workoutId!==wId) return;
   askConfirm('Apagar todas as séries marcadas deste treino?', function(){
-    current={ workoutId:null, startedAt:null, sets:{}, note:'' };
+    current={ workoutId:null, startedAt:null, sets:{}, note:'', swaps:{} };
     saveAll(); render();
   }, 'Apagar');
 }
@@ -1379,8 +1578,7 @@ function openBw(){
   document.getElementById('in-lbm').value=(last&&last.lbm!=null)?last.lbm:0;
   document.getElementById('in-waist').value=(last&&last.waist!=null)?last.waist:0;
   document.getElementById('in-visc').value=(last&&last.visc!=null)?last.visc:0;
-  document.getElementById('scrim').classList.add('show');
-  document.getElementById('bw-sheet').classList.add('show');
+  openSheetById('bw-sheet');
 }
 function adjustBwField(id,d){
   const el=document.getElementById(id);
@@ -1427,8 +1625,7 @@ function openBackup(){
   const acts=document.getElementById('backup-actions');
   acts.innerHTML='<button class="btn btn-secondary" onclick="closeAllSheets()">Fechar</button>'
     +'<button class="btn btn-primary" onclick="copyBackup()">Copiar</button>';
-  document.getElementById('scrim').classList.add('show');
-  document.getElementById('backup-sheet').classList.add('show');
+  openSheetById('backup-sheet');
 }
 function copyBackup(){
   const ta=document.getElementById('backup-ta');
@@ -1451,8 +1648,7 @@ function openImport(){
   const acts=document.getElementById('backup-actions');
   acts.innerHTML='<button class="btn btn-secondary" onclick="closeAllSheets()">Cancelar</button>'
     +'<button class="btn btn-primary" onclick="doImport()">Importar</button>';
-  document.getElementById('scrim').classList.add('show');
-  document.getElementById('backup-sheet').classList.add('show');
+  openSheetById('backup-sheet');
 }
 function doImport(){
   const txt=document.getElementById('import-ta').value.trim();
@@ -1467,33 +1663,469 @@ function doImport(){
   }, 'Substituir');
 }
 
+// ============ MOTOR IA (personal trainer) ============
+// Chama a API da Anthropic direto do navegador (a chave fica só no aparelho,
+// em localStorage). Gera um plano novo com base no plano atual, no histórico,
+// nas medidas e nas notas de sessão, e só aplica depois de um preview.
+let aiBusy=false, aiAbortCtl=null, aiStatusText='', aiPendingPlan=null, aiPendingResumo='';
+
+function aiSaveKey(v){ try{ localStorage.setItem(K_APIKEY, v.trim()); }catch(e){} }
+function aiSaveInst(v){ try{ localStorage.setItem(K_AIINST, v); }catch(e){} }
+function aiSaveProxy(v){ try{ localStorage.setItem(K_PROXY, v.trim()); }catch(e){} }
+function aiWipeKey(){ try{ localStorage.removeItem(K_APIKEY); }catch(e){} render(); showToast('Chave apagada deste aparelho'); }
+function aiProxy(){ const p=(loadStr(K_PROXY)||'').trim(); return /^https:\/\//.test(p)?p:''; }
+function aiHasCreds(){ return !!(aiProxy() || (loadStr(K_APIKEY)||'').trim()); }
+function setAiStatus(t){
+  aiStatusText=t;
+  document.querySelectorAll('.ai-status-live').forEach(function(el){ el.textContent=t; });
+}
+function aiCancel(){ if(aiAbortCtl) aiAbortCtl.abort(); }
+
+function planSchema(){
+  const exercise={
+    type:'object',
+    properties:{
+      name:{type:'string'},
+      sets:{type:'integer'},
+      reps:{type:'string'},
+      rest:{type:'integer'},
+      finisher:{type:'boolean'},
+      graviton:{type:'boolean'},
+      alts:{type:'array',items:{
+        type:'object',
+        properties:{ name:{type:'string'}, graviton:{type:'boolean'} },
+        required:['name','graviton'],
+        additionalProperties:false
+      }}
+    },
+    required:['name','sets','reps','rest','finisher','graviton','alts'],
+    additionalProperties:false
+  };
+  const day={
+    type:'object',
+    properties:{
+      title:{type:'string'},
+      day:{type:'string'},
+      exercises:{type:'array',items:exercise}
+    },
+    required:['title','day','exercises'],
+    additionalProperties:false
+  };
+  return {
+    type:'object',
+    properties:{ SEG:day, TER:day, QUA:day, QUI:day, SEX:day, SAB:day, DOM:day, resumo:{type:'string'} },
+    required:['SEG','TER','QUI','SEX','SAB','DOM','resumo'], // QUA opcional
+    additionalProperties:false
+  };
+}
+
+function aiSystemPrompt(){
+  return 'Você é um personal trainer experiente, especialista em hipertrofia e recomposição corporal, montando o plano semanal de um aluno intermediário que treina em academia comercial (máquinas, halteres, barras, polias e graviton).\n\n'
+    +'REGRAS FIXAS DO PLANO (não negociáveis):\n'
+    +'- Chaves de dia: SEG, TER, QUA, QUI, SEX, SAB, DOM. QUA (quarta) é opcional: inclua QUA se o plano atual do aluno tiver treino nela, e omita se for descanso — a menos que as instruções do aluno peçam diferente.\n'
+    +'- Treinos úteis de até ~45 min (SAB e DOM podem ser um pouco mais longos). Isso limita o número de séries por dia.\n'
+    +'- Abdômen como finisher nos dias de membros superiores; panturrilha como finisher nos dias de perna (siga o padrão do plano atual).\n'
+    +'- Dois dias de perna quando o plano tiver 7 dias; posterior de coxa separado do quadríceps pesado por pelo menos 2 dias.\n'
+    +'- Progressão: primeiro repetições, depois carga. Evitar falha absoluta em toda série.\n'
+    +'- Objetivo: hipertrofia, recomposição corporal, estética.\n\n'
+    +'FORMATO:\n'
+    +'- Nomes de exercícios em português do Brasil, curtos (máx ~40 caracteres).\n'
+    +'- Cada dia: title (ex: "PEITO + TRÍCEPS", máx 25 caracteres), day (complemento, ex: "+ ABDÔMEN"), exercises na ordem de execução com finishers por último.\n'
+    +'- Cada exercício: sets (2 a 5), reps como faixa (ex "8-10"), rest em segundos (120 compostos pesados, 90 compostos médios, 60 isoladores, 45 finishers), finisher true só para abdômen/panturrilha, e 4 a 6 alts (alternativas similares, incluindo variações de equipamento: barra, halter, máquina, polia).\n'
+    +'- graviton: true SOMENTE para exercícios em máquina assistida (graviton), onde o peso lançado é a AJUDA da máquina (menos peso = mais forte). Ex: barra fixa no graviton, paralelas no graviton. Puxada na polia NÃO é graviton.\n'
+    +'- resumo: 2 a 4 frases, em português, explicando o que mudou em relação ao plano atual e por quê, com base no histórico.\n\n'
+    +'Use o histórico para calibrar: exercícios estagnados podem ser trocados ou ter esquema de reps ajustado; o que está progredindo bem deve ser mantido. Leve as notas de sessão a sério (dores, sono, incômodos). Responda apenas com o JSON pedido.';
+}
+
+function aiHistorySummary(){
+  const recent=history.slice(-12);
+  if(!recent.length) return 'Sem treinos registrados ainda.';
+  return recent.map(function(s){
+    const lines=s.exercises.map(function(e){
+      let best=e.sets[0];
+      e.sets.forEach(function(x){ if(x.weight*x.reps>best.weight*best.reps) best=x; });
+      return '  - '+e.name+': '+e.sets.length+' séries, melhor '+fmtWeight(best.weight)+'kg×'+best.reps+', vol '+Math.round(exerciseVolume(e.sets));
+    }).join('\n');
+    return s.workoutId+' '+String(s.completedAt).slice(0,10)+' (vol total '+Math.round(sessionVolume(s))+')'
+      +(s.note?' — nota: '+s.note:'')+'\n'+lines;
+  }).join('\n');
+}
+
+function aiBodySummary(){
+  const sorted=[...bodyweight].sort((a,b)=>new Date(a.date)-new Date(b.date));
+  if(!sorted.length) return 'Sem medidas registradas.';
+  return sorted.slice(-3).map(function(b){
+    let t=String(b.date).slice(0,10)+': '+b.weight+'kg';
+    if(b.bf) t+=', '+b.bf+'% gordura';
+    if(b.lbm) t+=', '+b.lbm+'% massa magra';
+    if(b.waist) t+=', cintura '+b.waist+'cm';
+    return t;
+  }).join('\n');
+}
+
+function aiUserMsg(){
+  const inst=(loadStr(K_AIINST)||'').trim();
+  return 'PLANO ATUAL (JSON):\n'+JSON.stringify(WORKOUTS)
+    +'\n\nHISTÓRICO RECENTE (até 12 sessões, com notas do aluno):\n'+aiHistorySummary()
+    +'\n\nMEDIDAS CORPORAIS RECENTES:\n'+aiBodySummary()
+    +(inst?'\n\nINSTRUÇÕES DO ALUNO PARA ESTA REGENERAÇÃO:\n'+inst:'')
+    +'\n\nGere o plano semanal completo novo.';
+}
+
+// Lê o stream SSE da Messages API acumulando os deltas de texto.
+async function readSSE(resp){
+  let full='', stop=null, errMsg=null;
+  function handleLine(line){
+    line=line.trim();
+    if(!line.startsWith('data:')) return;
+    const payload=line.slice(5).trim();
+    if(!payload) return;
+    let ev; try{ ev=JSON.parse(payload); }catch(e){ return; }
+    if(ev.type==='content_block_delta' && ev.delta && ev.delta.type==='text_delta'){
+      full+=ev.delta.text;
+      setAiStatus('Gerando plano… '+(full.length>1000?Math.round(full.length/1000)+'k':full.length)+' caracteres');
+    } else if(ev.type==='message_delta' && ev.delta && ev.delta.stop_reason){
+      stop=ev.delta.stop_reason;
+    } else if(ev.type==='error'){
+      errMsg=(ev.error&&ev.error.message)||'erro no stream';
+    }
+  }
+  if(resp.body && resp.body.getReader){
+    const reader=resp.body.getReader();
+    const dec=new TextDecoder();
+    let buf='';
+    while(true){
+      const r=await reader.read();
+      if(r.done) break;
+      buf+=dec.decode(r.value,{stream:true});
+      let idx;
+      while((idx=buf.indexOf('\n'))>=0){ handleLine(buf.slice(0,idx)); buf=buf.slice(idx+1); }
+    }
+    if(buf) handleLine(buf);
+  } else {
+    // fallback para webviews sem streaming de fetch
+    (await resp.text()).split('\n').forEach(handleLine);
+  }
+  return { text:full, stop:stop, err:errMsg };
+}
+
+async function aiRequest(key, useFallbacks, sys, usr){
+  aiAbortCtl=new AbortController();
+  const killer=setTimeout(function(){ if(aiAbortCtl) aiAbortCtl.abort(); }, 360000);
+  try{
+    const body={
+      model:'claude-opus-5',
+      max_tokens:64000,
+      stream:true,
+      system:sys,
+      messages:[{role:'user',content:usr}],
+      output_config:{ format:{ type:'json_schema', schema:planSchema() } }
+    };
+    // Com proxy configurado, a chave mora no servidor (secret do Worker) e o
+    // navegador não envia credencial nenhuma. Sem proxy, chamada direta com a chave local.
+    const proxy=aiProxy();
+    const url=proxy||'https://api.anthropic.com/v1/messages';
+    const headers={ 'content-type':'application/json' };
+    if(!proxy){
+      headers['x-api-key']=key;
+      headers['anthropic-version']='2023-06-01';
+      // habilita CORS para chamada direta do navegador (app pessoal, chave do próprio usuário)
+      headers['anthropic-dangerous-direct-browser-access']='true';
+    }
+    if(useFallbacks){
+      // se um classificador recusar, a API re-roda no modelo de fallback na mesma chamada
+      headers['anthropic-beta']='server-side-fallback-2026-07-01';
+      body.fallbacks='default';
+    }
+    setAiStatus('Chamando o personal IA…');
+    const resp=await fetch(url,{
+      method:'POST', headers:headers, body:JSON.stringify(body), signal:aiAbortCtl.signal
+    });
+    if(!resp.ok){
+      let msg='HTTP '+resp.status;
+      try{ const j=await resp.json(); if(j.error&&j.error.message) msg=j.error.message; }catch(e){}
+      if(resp.status===400 && useFallbacks) return await aiRequest(key,false,sys,usr);
+      const err=new Error(msg); err.status=resp.status; throw err;
+    }
+    const out=await readSSE(resp);
+    if(out.err) throw new Error(out.err);
+    if(out.stop==='refusal') throw new Error('A IA recusou gerar. Reformula as instruções e tenta de novo.');
+    if(out.stop==='max_tokens') throw new Error('Resposta cortada no limite. Tenta de novo.');
+    let obj;
+    try{ obj=JSON.parse(out.text); }catch(e){ throw new Error('A resposta não veio em JSON válido. Tenta de novo.'); }
+    return obj;
+  } finally {
+    clearTimeout(killer);
+    aiAbortCtl=null;
+  }
+}
+
+function aiErrMsg(e){
+  if(e && e.name==='AbortError') return 'Geração cancelada.';
+  const s=e&&e.status;
+  if(s===401) return 'Chave inválida. Confere a chave da API.';
+  if(s===403) return aiProxy()?'Proxy recusou (403). Confere o ALLOWED_ORIGINS do Worker.':'Chave sem permissão para essa chamada.';
+  if(s===429) return 'Limite de uso atingido. Espera um minuto e tenta de novo.';
+  if(s===529||(s&&s>=500)) return 'API sobrecarregada. Tenta de novo em instantes.';
+  if(e && /fetch|network|load failed/i.test(e.message||'')) return 'Sem conexão com a API. Confere a internet.';
+  return 'Erro: '+((e&&e.message)||'desconhecido');
+}
+
+// Valida e converte o JSON da IA para o formato interno do app.
+function normalizePlan(raw){
+  if(!raw||typeof raw!=='object') return null;
+  const out={};
+  for(const k of PLAN_DAYS){
+    const d=raw[k];
+    if(k==='QUA' && !d) continue; // quarta é opcional
+    if(!d||!Array.isArray(d.exercises)||d.exercises.length<1||d.exercises.length>12) return null;
+    let exs=d.exercises.map(function(e){
+      if(!e||typeof e.name!=='string'||!e.name.trim()) return null;
+      const o={
+        name:e.name.trim().slice(0,60),
+        sets:Math.max(1,Math.min(8,Math.round(e.sets)||3)),
+        reps:String(e.reps||'10-12').slice(0,12)
+      };
+      // rest só quando informado; sem ele valem as tabelas por nome (REST_120 etc)
+      if(typeof e.rest==='number'&&isFinite(e.rest)) o.rest=Math.max(30,Math.min(240,Math.round(e.rest)));
+      if(e.finisher===true) o.finisher=true;
+      if(e.graviton===true) o.graviton=true;
+      const alts=Array.isArray(e.alts)?e.alts.slice(0,6):[];
+      o.alts=alts.map(function(a){
+        a=normAlt(a);
+        if(!a||typeof a.name!=='string'||!a.name.trim()) return null;
+        const x={name:a.name.trim().slice(0,60)};
+        if(a.graviton===true) x.graviton=true;
+        return x;
+      }).filter(Boolean);
+      return o;
+    });
+    if(exs.some(function(e){ return !e; })) return null;
+    exs=exs.filter(function(e){ return !e.finisher; }).concat(exs.filter(function(e){ return e.finisher; }));
+    out[k]={
+      title:(String(d.title||'').trim().slice(0,30))||k,
+      sub:PLAN_SUBS[k],
+      day:String(d.day||'').trim().slice(0,30),
+      exercises:exs
+    };
+  }
+  return out;
+}
+
+async function aiGenerate(){
+  if(aiBusy) return;
+  const key=(loadStr(K_APIKEY)||'').trim();
+  if(!aiHasCreds()){ showToast('Configura o proxy ou cola a chave da API primeiro'); return; }
+  aiBusy=true; aiStatusText='Preparando…'; render();
+  try{
+    const raw=await aiRequest(key,true,aiSystemPrompt(),aiUserMsg());
+    const plan=normalizePlan(raw);
+    aiBusy=false;
+    if(!plan){ aiStatusText='A IA retornou um plano fora do formato. Tenta de novo.'; render(); return; }
+    aiStatusText=''; render();
+    openPlanPreview(plan, typeof raw.resumo==='string'?raw.resumo:'');
+  }catch(e){
+    aiBusy=false;
+    aiStatusText=aiErrMsg(e);
+    render();
+  }
+}
+
+// ---- Importar treino colado ----
+// JSON no formato do app aplica direto (sem API). Texto livre (treino do
+// personal, de outro chat etc) é convertido pela IA para o schema do plano.
+function aiConvertSystemPrompt(){
+  return 'Você é um assistente que converte treinos escritos em texto livre para um formato JSON fixo de app de treino. NÃO invente um plano novo: preserve fielmente os exercícios, a ordem, as séries e as repetições do texto colado.\n\n'
+    +'REGRAS DE CONVERSÃO:\n'
+    +'- Chaves de dia do app: SEG, TER, QUA, QUI, SEX, SAB, DOM — QUA (quarta) é opcional: use se o texto tiver treino na quarta, omita se não tiver. Se o texto nomear dias da semana, mapeie direto. Se tiver menos treinos que dias (ex: ABC, upper/lower), distribua na semana repetindo na ordem (ex: ABC → SEG=A TER=B QUI=C SEX=A SAB=B DOM=C, sem QUA) e explique no resumo. Se tiver mais dias que o app comporta, funda os mais parecidos e explique.\n'
+    +'- Nomes de exercícios em português do Brasil, curtos (máx ~40 caracteres), mantendo o equipamento citado.\n'
+    +'- sets: número de séries do texto (se faltar, 3). reps: faixa como string (se faltar, "10-12").\n'
+    +'- rest em segundos se o texto disser; senão estime: 120 compostos pesados, 90 compostos médios, 60 isoladores, 45 finishers.\n'
+    +'- finisher: true para abdômen/panturrilha no fim do treino.\n'
+    +'- graviton: true SOMENTE para exercícios em máquina assistida (graviton/assistida), onde o peso lançado é a ajuda. Puxada na polia NÃO é graviton.\n'
+    +'- alts: gere 4 a 6 alternativas similares por exercício (variações de barra/halter/máquina/polia), mesmo que o texto não traga.\n'
+    +'- title de cada dia: grupos trabalhados (ex "PEITO + TRÍCEPS", máx 25 caracteres). day: complemento curto (ex "+ ABDÔMEN") ou string vazia.\n'
+    +'- resumo: 2 a 4 frases dizendo como o texto foi mapeado e o que foi assumido.\n\n'
+    +'Responda apenas com o JSON pedido.';
+}
+
+function openPlanImport(){
+  document.getElementById('backup-eyebrow').textContent='IMPORTAR TREINO';
+  document.getElementById('backup-title').textContent='Colar treino novo';
+  document.getElementById('backup-body').innerHTML=
+    '<div style="font-size:12px;color:var(--mute);margin-bottom:10px">Cole o treino em qualquer formato: texto do personal, treino gerado em outro chat, ou JSON deste app. Vira o plano ativo depois de um preview. Histórico, medidas e recordes não são tocados, e dá pra voltar ao plano original quando quiser.</div>'
+    +'<textarea class="ta" id="plan-import-ta" placeholder="cole o treino aqui" style="min-height:150px"></textarea>'
+    +'<div class="ai-status ai-status-live" style="margin-top:8px">'+esc(aiStatusText)+'</div>';
+  resetImportActions();
+  openSheetById('backup-sheet');
+}
+
+function resetImportActions(){
+  const acts=document.getElementById('backup-actions');
+  if(acts) acts.innerHTML='<button class="btn btn-secondary" onclick="closeAllSheets()">Cancelar</button>'
+    +'<button class="btn btn-primary" onclick="importPlanText()">Converter</button>';
+}
+
+async function importPlanText(){
+  if(aiBusy){ showToast('Já tem uma geração em andamento'); return; }
+  const ta=document.getElementById('plan-import-ta');
+  const txt=(ta?ta.value:'').trim();
+  if(!txt){ showToast('Cola o treino primeiro'); return; }
+
+  // 1) JSON já no formato: aplica sem gastar API
+  let parsed=null;
+  try{ parsed=JSON.parse(txt); }catch(e){}
+  if(parsed && typeof parsed==='object'){
+    const plan=normalizePlan(parsed);
+    if(plan){ setAiStatus(''); openPlanPreview(plan, typeof parsed.resumo==='string'?parsed.resumo:'Importado do JSON colado, sem passar pela IA.'); return; }
+    setAiStatus('É JSON, mas fora do formato do plano. Corrige, ou cola como texto normal pra IA converter.');
+    return;
+  }
+
+  // 2) Texto livre: IA converte
+  if(!aiHasCreds()){ setAiStatus('Pra converter texto livre precisa do proxy ou da chave (card MOTOR IA). JSON do app aplica sem chave.'); return; }
+  const key=(loadStr(K_APIKEY)||'').trim();
+  aiBusy=true;
+  const acts=document.getElementById('backup-actions');
+  if(acts) acts.innerHTML='<button class="btn btn-secondary" onclick="aiCancel()">Cancelar geração</button>';
+  try{
+    const raw=await aiRequest(key,true,aiConvertSystemPrompt(),'TREINO COLADO PELO ALUNO:\n\n'+txt+'\n\nConverta para o plano semanal no formato pedido.');
+    const plan=normalizePlan(raw);
+    aiBusy=false;
+    if(!plan){ setAiStatus('A conversão veio fora do formato. Tenta de novo.'); resetImportActions(); return; }
+    setAiStatus('');
+    openPlanPreview(plan, typeof raw.resumo==='string'?raw.resumo:'');
+  }catch(e){
+    aiBusy=false;
+    setAiStatus(aiErrMsg(e));
+    resetImportActions();
+  }
+}
+
+// Aba do dia de hoje (quarta é descanso → cai na SEG)
+function todayTabId(){
+  const map=['DOM','SEG','TER','QUA','QUI','SEX','SAB'];
+  const t=map[new Date().getDay()];
+  return WORKOUTS[t]?t:'SEG';
+}
+
+function openPlanPreview(plan, resumo){
+  aiPendingPlan=plan; aiPendingResumo=resumo||'';
+  document.getElementById('backup-eyebrow').textContent='PLANO GERADO PELA IA';
+  document.getElementById('backup-title').textContent='Revisar antes de aplicar';
+  let html='';
+  if(resumo) html+='<div class="session-note" style="margin-bottom:10px">'+esc(resumo)+'</div>';
+  PLAN_DAYS.forEach(function(k){
+    const d=plan[k];
+    if(!d){ html+='<div class="guide-card"><div class="guide-label">'+k+' · DESCANSO</div></div>'; return; }
+    html+='<div class="guide-card"><div class="guide-label">'+k+' · '+esc(d.title)+(d.day?' '+esc(d.day):'')+'</div>'
+      +'<div style="font-size:12px;color:var(--mute);line-height:1.5">'
+      +d.exercises.map(function(e){ return esc(e.name)+' '+e.sets+'×'+esc(e.reps)+(e.graviton?' (ajuda)':''); }).join(' · ')
+      +'</div></div>';
+  });
+  document.getElementById('backup-body').innerHTML=html;
+  document.getElementById('backup-actions').innerHTML=
+    '<button class="btn btn-secondary" onclick="closeAllSheets()">Cancelar</button>'
+    +'<button class="btn btn-primary" onclick="applyAiPlan()">Aplicar plano</button>';
+  openSheetById('backup-sheet');
+}
+
+function applyAiPlan(){
+  if(!aiPendingPlan) return;
+  const doApply=function(){
+    WORKOUTS=aiPendingPlan; aiPendingPlan=null;
+    try{
+      localStorage.setItem(K_PLAN, JSON.stringify(WORKOUTS));
+      localStorage.setItem(K_PLAN_META, JSON.stringify({ generatedAt:new Date().toISOString(), resumo:aiPendingResumo }));
+    }catch(e){}
+    current={ workoutId:null, startedAt:null, sets:{}, note:'', swaps:{} };
+    active=todayTabId(); // já cai na tela de uso do dia
+    saveAll(); closeAllSheets(); render(); window.scrollTo(0,0);
+    showToast('Plano novo aplicado');
+  };
+  if(current.workoutId && Object.values(current.sets).some(function(s){ return s.done; })){
+    askConfirm('Aplicar o plano novo vai zerar o treino em andamento ('+current.workoutId+'). Continuar?', doApply, 'Aplicar');
+  } else doApply();
+}
+
+function restoreDefaultPlan(){
+  askConfirm('Voltar ao plano original? O plano gerado pela IA será descartado.', function(){
+    WORKOUTS=DEFAULT_WORKOUTS;
+    try{ localStorage.removeItem(K_PLAN); localStorage.removeItem(K_PLAN_META); }catch(e){}
+    if(current.workoutId) current={ workoutId:null, startedAt:null, sets:{}, note:'', swaps:{} };
+    saveAll(); render(); showToast('Plano original restaurado');
+  }, 'Restaurar');
+}
+
+function renderAiCard(){
+  const custom=validatePlanShape(loadObj(K_PLAN));
+  const meta=loadObj(K_PLAN_META);
+  const key=loadStr(K_APIKEY)||'';
+  const inst=loadStr(K_AIINST)||'';
+  const proxy=loadStr(K_PROXY)||'';
+  const hasProxy=!!aiProxy();
+  let html='<div class="prog" style="margin-top:0;margin-bottom:16px"><div class="prog-label">MOTOR IA · PERSONAL TRAINER</div>';
+  html+='<div style="font-size:12px;color:var(--mute);margin-bottom:10px">Gera um plano novo com base no seu histórico, medidas e notas — ou importa um treino colado. '
+    +(custom?('<b style="color:var(--accent)">Plano IA ativo</b>'+(meta&&meta.generatedAt?' desde '+fmtDate(meta.generatedAt):'')+'.'):'Plano original ativo.')
+    +'</div>';
+  html+='<input class="ai-input" type="url" autocomplete="off" placeholder="URL do proxy (recomendado): https://…workers.dev" value="'+esc(proxy)+'" oninput="aiSaveProxy(this.value)">';
+  if(hasProxy){
+    html+='<div style="font-size:11px;color:var(--good);font-weight:700;margin:-2px 0 8px">Proxy ativo — a chave fica no servidor, nada de chave neste aparelho.</div>';
+    if(key) html+='<button class="reset-link" style="margin:0 auto 8px" onclick="aiWipeKey()">Apagar a chave que ainda está salva neste aparelho</button>';
+  } else {
+    html+='<input class="ai-input" type="password" autocomplete="off" placeholder="Ou: chave da API direto aqui (sk-ant-…)" value="'+esc(key)+'" oninput="aiSaveKey(this.value)">';
+  }
+  html+='<textarea class="ai-input" style="min-height:64px;resize:vertical" placeholder="Instruções pro personal (opcional): ex. mais foco em ombro, tirar stiff, sessões de 40 min" oninput="aiSaveInst(this.value)">'+esc(inst)+'</textarea>';
+  if(aiBusy){
+    html+='<button class="bw-add-btn" style="margin-bottom:8px;background:var(--border-strong)" onclick="aiCancel()">CANCELAR GERAÇÃO</button>';
+  } else {
+    html+='<button class="bw-add-btn" style="margin-bottom:8px" onclick="aiGenerate()">GERAR NOVO PLANO COM IA</button>';
+    html+='<button class="bw-add-btn" style="margin-bottom:8px;background:var(--ink)" onclick="openPlanImport()">IMPORTAR TREINO COLADO</button>';
+  }
+  html+='<div class="ai-status ai-status-live">'+esc(aiStatusText)+'</div>';
+  if(custom&&!aiBusy) html+='<button class="reset-link" style="margin:8px auto 0" onclick="restoreDefaultPlan()">Voltar ao plano original</button>';
+  if(custom&&meta&&meta.resumo) html+='<div class="session-note" style="margin-top:10px">'+esc(meta.resumo)+'</div>';
+  html+='<div style="font-size:10px;color:var(--faint);margin-top:10px">'
+    +(hasProxy?'As chamadas passam pelo seu proxy; a chave mora lá como secret (equivalente do .env).'
+      :'Sem proxy, a chave fica neste aparelho e vai direto pra API da Anthropic. Pra tirar a chave do aparelho, configura o proxy (instruções no README).')
+    +' Cada geração custa em torno de US$ 0,30–0,50 (Claude Opus).</div>';
+  html+='</div>';
+  return html;
+}
+
 // ============ GUIDE ============
 function renderGuide(){
+  const has7=!!WORKOUTS.QUA;
   const rules=[
-    {l:'Frequência', v:'6x por semana, quarta off'},
+    {l:'Frequência', v:has7?'7x por semana, quarta = Pernas A':'6x por semana, quarta off'},
+    {l:'Semana ruim', v:'Inegociáveis: SEG, TER, SEX e os dias de perna'},
     {l:'Duração útil', v:'Até 45 min (sáb/dom mais longos)'},
     {l:'Cardio pós-treino', v:'15-20 min caminhada inclinada'},
-    {l:'Progressão', v:'Primeiro reps, depois carga'},
+    {l:'Pesagem', v:'Todo sábado, em jejum'},
+    {l:'Halter', v:'Registrar o peso por lado, nunca o total'},
     {l:'Falha', v:'Evitar falha absoluta em toda série'},
-    {l:'Barra fixa', v:'No graviton, peso = ajuda da máquina'},
     {l:'Objetivo', v:'Hipertrofia, recomp, estética'},
   ];
   const progRules=[
-    {c:'Fez 8 reps limpas', a:'Mantém carga'},
-    {c:'Fez 10 reps limpas', a:'Tenta mais reps'},
-    {c:'Fez 12 reps limpas', a:'Aumenta carga'},
+    {c:'Dentro da faixa de reps', a:'Busca +1 rep'},
+    {c:'Fechou o topo em todas as séries', a:'Sobe 2-2,5kg, volta pro piso'},
     {c:'Execução piorou', a:'Reduz carga'},
+    {c:'Lombar no stiff/agacho', a:'Técnica antes de carga'},
   ];
   const gravRules=[
-    {c:'Menos peso de ajuda', a:'Você está mais forte'},
-    {c:'Mais reps, mesma ajuda', a:'Progresso'},
-    {c:'Meta de longo prazo', a:'Zerar a ajuda'},
+    {c:'Fez 4x10 com a ajuda atual', a:'Tira 2-3kg de ajuda'},
+    {c:'Escada de ajuda', a:'18 → 15 → 12 → 9 → 6 → 3 → livre'},
+    {c:'Meta', a:'Barra livre até out/nov'},
   ];
+  // grade da semana derivada do plano ativo (reflete plano da IA, se houver)
+  const code=function(id){ const t=(WORKOUTS[id]&&WORKOUTS[id].title)||''; return t.split(' ')[0].slice(0,7)||id; };
   const days=[
-    {n:'SEG', c:'PEITO'}, {n:'TER', c:'COSTAS'}, {n:'QUA', c:'OFF', rest:true},
-    {n:'QUI', c:'BR+POST'}, {n:'SEX', c:'OMBRO'}, {n:'SÁB', c:'P+C'}, {n:'DOM', c:'PERNA'},
+    {n:'SEG', c:code('SEG')}, {n:'TER', c:code('TER')},
+    {n:'QUA', c:WORKOUTS.QUA?code('QUA'):'OFF', rest:!WORKOUTS.QUA},
+    {n:'QUI', c:code('QUI')}, {n:'SEX', c:code('SEX')}, {n:'SÁB', c:code('SAB')}, {n:'DOM', c:code('DOM')},
   ];
   let html='<div class="section-head"><div class="eyebrow">DIRETRIZES</div><div class="display">GUIA RÁPIDO</div></div>';
+  html+=renderAiCard();
   html+='<div class="schedule"><div class="schedule-label">SEMANA</div><div class="schedule-grid">'
     +days.map(d=>'<div class="day '+(d.rest?'rest':'')+'"><div class="day-name">'+d.n+'</div><div class="day-code">'+(d.rest?'OFF':d.c)+'</div></div>').join('')
     +'</div></div><div style="margin-top:16px"></div>';
@@ -1676,6 +2308,13 @@ function showToast(msg){
 }
 
 render();
+
+// Offline support. No-op when the file is opened locally (file://).
+if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
+  window.addEventListener('load', function(){
+    navigator.serviceWorker.register('sw.js').catch(function(){ /* optional */ });
+  });
+}
 </script>
 </body>
 </html>
