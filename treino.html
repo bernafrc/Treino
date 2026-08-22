@@ -804,6 +804,7 @@ const K_PLAN_META = 'wo_plan_meta_v1';
 const K_APIKEY = 'wo_apikey_v1';    // modo direto (fallback); com proxy configurado fica vazio
 const K_AIINST = 'wo_aiinst_v1';
 const K_PROXY = 'wo_proxy_v1';      // URL do proxy que guarda a chave (Cloudflare Worker)
+const K_ANALYSIS = 'wo_analysis_v1'; // última análise de histórico feita pela IA
 
 function loadStr(k){ try{return localStorage.getItem(k);}catch(e){return null;} }
 function loadObj(k){ try{const v=localStorage.getItem(k); return v?JSON.parse(v):null;}catch(e){return null;} }
@@ -1059,6 +1060,12 @@ function renderHistory(){
     +'<div class="hist-divider"></div>'
     +'<div class="hist-stat"><div class="hist-stat-val">'+fmtVol(totalVol)+'</div><div class="hist-stat-lab">VOL TOTAL KG</div></div>'
     +'</div>';
+
+  if(history.length>0){
+    html+='<button class="bw-add-btn" style="margin-bottom:8px" onclick="openAnalyze()">ANÁLISE DO PERSONAL IA</button>';
+    const savedA=loadObj(K_ANALYSIS);
+    if(savedA) html+='<button class="reset-link" style="margin:0 auto 14px" onclick="reopenAnalysis()">Ver última análise ('+fmtRelative(savedA.generatedAt)+')</button>';
+  }
 
   html+='<div class="data-row">'
     +'<button class="data-btn" onclick="exportPDF()">EXPORTAR PDF</button>'
@@ -1673,7 +1680,24 @@ function aiSaveKey(v){ try{ localStorage.setItem(K_APIKEY, v.trim()); }catch(e){
 function aiSaveInst(v){ try{ localStorage.setItem(K_AIINST, v); }catch(e){} }
 function aiSaveProxy(v){ try{ localStorage.setItem(K_PROXY, v.trim()); }catch(e){} }
 function aiWipeKey(){ try{ localStorage.removeItem(K_APIKEY); }catch(e){} render(); showToast('Chave apagada deste aparelho'); }
-function aiProxy(){ const p=(loadStr(K_PROXY)||'').trim(); return /^https:\/\//.test(p)?p:''; }
+
+// Hospedado no Cloudflare Pages, o proxy é uma function do próprio site em
+// /api/messages — detectada por sonda (GET responde 405). Nada a configurar.
+let aiSiteProxy=false;
+(function probeSiteProxy(){
+  if(location.protocol.indexOf('http')!==0) return;
+  if(/\.github\.io$/.test(location.hostname)) return; // GitHub Pages não tem functions
+  fetch('/api/messages',{method:'GET'}).then(function(r){
+    if(r.status===405){ aiSiteProxy=true; if(active==='GUIA') render(); }
+  }).catch(function(){});
+})();
+
+function aiProxy(){
+  const p=(loadStr(K_PROXY)||'').trim();
+  if(/^https:\/\//.test(p)) return p;        // proxy manual (Worker avulso) vence
+  if(aiSiteProxy) return '/api/messages';    // function do próprio site
+  return '';
+}
 function aiHasCreds(){ return !!(aiProxy() || (loadStr(K_APIKEY)||'').trim()); }
 function setAiStatus(t){
   aiStatusText=t;
@@ -1765,9 +1789,18 @@ function aiBodySummary(){
 
 function aiUserMsg(){
   const inst=(loadStr(K_AIINST)||'').trim();
+  let analysisCtx='';
+  const saved=loadObj(K_ANALYSIS);
+  if(saved&&saved.data){
+    const d=saved.data;
+    const flat=function(items){ return (items||[]).map(function(it){ return '- '+it.titulo+': '+it.detalhe; }).join('\n'); };
+    analysisCtx='\n\nÚLTIMA ANÁLISE DO PERSONAL ('+String(saved.generatedAt).slice(0,10)+', período desde '+saved.from+') — leve em conta:\n'
+      +(d.veredito||'')+'\nProgressos:\n'+flat(d.progressos)+'\nProblemas:\n'+flat(d.problemas)+'\nRecomendações:\n'+flat(d.recomendacoes);
+  }
   return 'PLANO ATUAL (JSON):\n'+JSON.stringify(WORKOUTS)
     +'\n\nHISTÓRICO RECENTE (até 12 sessões, com notas do aluno):\n'+aiHistorySummary()
     +'\n\nMEDIDAS CORPORAIS RECENTES:\n'+aiBodySummary()
+    +analysisCtx
     +(inst?'\n\nINSTRUÇÕES DO ALUNO PARA ESTA REGENERAÇÃO:\n'+inst:'')
     +'\n\nGere o plano semanal completo novo.';
 }
@@ -1809,7 +1842,7 @@ async function readSSE(resp){
   return { text:full, stop:stop, err:errMsg };
 }
 
-async function aiRequest(key, useFallbacks, sys, usr){
+async function aiRequest(key, useFallbacks, sys, usr, schema){
   aiAbortCtl=new AbortController();
   const killer=setTimeout(function(){ if(aiAbortCtl) aiAbortCtl.abort(); }, 360000);
   try{
@@ -1819,7 +1852,7 @@ async function aiRequest(key, useFallbacks, sys, usr){
       stream:true,
       system:sys,
       messages:[{role:'user',content:usr}],
-      output_config:{ format:{ type:'json_schema', schema:planSchema() } }
+      output_config:{ format:{ type:'json_schema', schema:schema||planSchema() } }
     };
     // Com proxy configurado, a chave mora no servidor (secret do Worker) e o
     // navegador não envia credencial nenhuma. Sem proxy, chamada direta com a chave local.
@@ -1844,7 +1877,7 @@ async function aiRequest(key, useFallbacks, sys, usr){
     if(!resp.ok){
       let msg='HTTP '+resp.status;
       try{ const j=await resp.json(); if(j.error&&j.error.message) msg=j.error.message; }catch(e){}
-      if(resp.status===400 && useFallbacks) return await aiRequest(key,false,sys,usr);
+      if(resp.status===400 && useFallbacks) return await aiRequest(key,false,sys,usr,schema);
       const err=new Error(msg); err.status=resp.status; throw err;
     }
     const out=await readSSE(resp);
@@ -2002,6 +2035,161 @@ async function importPlanText(){
   }
 }
 
+// ---- Análise de histórico pela IA ----
+// Escolhe "a partir de quando" e o personal IA analisa as sessões da faixa,
+// série a série. Resultado fica salvo (K_ANALYSIS) e alimenta a próxima
+// geração de plano.
+function analysisSchema(){
+  const item={
+    type:'object',
+    properties:{ titulo:{type:'string'}, detalhe:{type:'string'} },
+    required:['titulo','detalhe'],
+    additionalProperties:false
+  };
+  return {
+    type:'object',
+    properties:{
+      veredito:{type:'string'},
+      progressos:{type:'array',items:item},
+      problemas:{type:'array',items:item},
+      recomendacoes:{type:'array',items:item}
+    },
+    required:['veredito','progressos','problemas','recomendacoes'],
+    additionalProperties:false
+  };
+}
+
+function analysisSystemPrompt(){
+  return 'Você é um personal trainer experiente analisando o diário de treino de um aluno intermediário (objetivo: hipertrofia e recomposição corporal). Seja direto, concreto e honesto, em português do Brasil.\n\n'
+    +'COMO ANALISAR:\n'
+    +'- Cite números do log em tudo (cargas, reps, datas). Não invente nada que não esteja nos dados.\n'
+    +'- progressos: exercícios com progressão real de carga/reps no período, com os números (de X para Y).\n'
+    +'- problemas: estagnação (mesma carga por semanas), desequilíbrios de volume entre grupos musculares, consistência (buracos entre sessões), técnica/dor citada nas notas, séries sem progressão planejada.\n'
+    +'- recomendacoes: mudanças práticas e específicas (o que fazer no próximo treino/semana), incluindo metas numéricas quando fizer sentido.\n'
+    +'- Exercícios marcados com (graviton: peso = ajuda) são assistidos: peso MENOR = mais forte. Não trate queda de peso neles como regressão.\n'
+    +'- Considere as notas de sessão (sono, dor, incômodo) e as medidas corporais, se houver.\n'
+    +'- veredito: 2-3 frases resumindo o período.\n'
+    +'- titulo de cada item: curto (máx ~40 caracteres). detalhe: 1-3 frases com os números.';
+}
+
+function sessionsFrom(fromStr){
+  const cut=new Date(fromStr+'T00:00:00').getTime();
+  return history.filter(function(s){ return new Date(s.completedAt).getTime()>=cut; });
+}
+
+function analysisUserMsg(fromStr){
+  const sel=sessionsFrom(fromStr).slice(-100);
+  const lines=sel.map(function(s){
+    const exs=s.exercises.map(function(e){
+      const grav=GRAVITON_NAMES.has(e.name)?' (graviton: peso = ajuda)':'';
+      const sets=e.sets.map(function(x){ return fmtWeight(x.weight)+'x'+x.reps; }).join(', ');
+      return '  - '+e.name+grav+': '+sets;
+    }).join('\n');
+    return s.workoutId+' '+String(s.completedAt).slice(0,10)+' (vol '+Math.round(sessionVolume(s))+')'
+      +(s.note?' — nota: "'+s.note+'"':'')+'\n'+exs;
+  }).join('\n');
+  const planLean={};
+  PLAN_DAYS.forEach(function(k){
+    if(!WORKOUTS[k]) return;
+    planLean[k]=WORKOUTS[k].title+': '+WORKOUTS[k].exercises.map(function(e){ return e.name+' '+e.sets+'x'+e.reps; }).join(', ');
+  });
+  return 'PERÍODO ANALISADO: de '+fromStr+' até hoje ('+sel.length+' sessões).\n\n'
+    +'PLANO ATUAL:\n'+JSON.stringify(planLean,null,1)
+    +'\n\nMEDIDAS CORPORAIS:\n'+aiBodySummary()
+    +'\n\nDIÁRIO DE TREINO (peso x reps por série):\n'+lines
+    +'\n\nAnalise o período.';
+}
+
+function openAnalyze(){
+  const def=new Date(Date.now()-60*86400000).toISOString().slice(0,10);
+  document.getElementById('backup-eyebrow').textContent='ANÁLISE DO PERSONAL IA';
+  document.getElementById('backup-title').textContent='Analisar a partir de quando?';
+  document.getElementById('backup-body').innerHTML=
+    '<div class="chart-toggle" style="margin-bottom:10px">'
+      +[30,60,90].map(function(d){ return '<button onclick="setAnalyzeFrom('+d+')">'+d+' DIAS</button>'; }).join('')
+      +'<button onclick="setAnalyzeFrom(0)">TUDO</button>'
+    +'</div>'
+    +'<div class="input-block" style="margin-bottom:10px"><div class="input-label">A PARTIR DE</div>'
+    +'<input class="ai-input" style="margin-bottom:0" type="date" id="analyze-from" value="'+def+'" oninput="updateAnalyzeCount()"></div>'
+    +'<div id="analyze-count" style="font-size:12px;color:var(--mute);margin-bottom:4px"></div>'
+    +'<div class="ai-status ai-status-live">'+esc(aiStatusText)+'</div>';
+  document.getElementById('backup-actions').innerHTML=
+    '<button class="btn btn-secondary" onclick="closeAllSheets()">Cancelar</button>'
+    +'<button class="btn btn-primary" onclick="runAnalysis()">Analisar</button>';
+  openSheetById('backup-sheet');
+  updateAnalyzeCount();
+}
+
+function setAnalyzeFrom(days){
+  const el=document.getElementById('analyze-from'); if(!el) return;
+  el.value = days>0
+    ? new Date(Date.now()-days*86400000).toISOString().slice(0,10)
+    : (history.length?String(history[0].completedAt).slice(0,10):'2026-01-01');
+  updateAnalyzeCount();
+}
+
+function updateAnalyzeCount(){
+  const el=document.getElementById('analyze-from');
+  const out=document.getElementById('analyze-count');
+  if(!el||!out) return;
+  const n=el.value?sessionsFrom(el.value).length:0;
+  out.textContent=n+' sessão(ões) no período';
+}
+
+async function runAnalysis(){
+  if(aiBusy){ showToast('Já tem uma geração em andamento'); return; }
+  const el=document.getElementById('analyze-from');
+  const fromStr=el?el.value:'';
+  if(!fromStr){ showToast('Escolhe a data'); return; }
+  if(sessionsFrom(fromStr).length===0){ setAiStatus('Nenhuma sessão nesse período.'); return; }
+  if(!aiHasCreds()){ setAiStatus('Precisa do proxy ou da chave da API (card MOTOR IA, aba GUIA).'); return; }
+  const key=(loadStr(K_APIKEY)||'').trim();
+  aiBusy=true;
+  document.getElementById('backup-actions').innerHTML='<button class="btn btn-secondary" onclick="aiCancel()">Cancelar geração</button>';
+  try{
+    const raw=await aiRequest(key,true,analysisSystemPrompt(),analysisUserMsg(fromStr),analysisSchema());
+    aiBusy=false; setAiStatus('');
+    const saved={ generatedAt:new Date().toISOString(), from:fromStr, data:raw };
+    try{ localStorage.setItem(K_ANALYSIS, JSON.stringify(saved)); }catch(e){}
+    renderAnalysisResult(saved);
+  }catch(e){
+    aiBusy=false;
+    setAiStatus(aiErrMsg(e));
+    document.getElementById('backup-actions').innerHTML=
+      '<button class="btn btn-secondary" onclick="closeAllSheets()">Fechar</button>'
+      +'<button class="btn btn-primary" onclick="runAnalysis()">Tentar de novo</button>';
+  }
+}
+
+function renderAnalysisResult(saved){
+  const d=saved.data||{};
+  document.getElementById('backup-eyebrow').textContent='ANÁLISE DO PERSONAL IA';
+  document.getElementById('backup-title').textContent='Desde '+fmtDate(saved.from+'T12:00:00')+' · gerada '+fmtRelative(saved.generatedAt);
+  const sec=function(label,items,color){
+    if(!Array.isArray(items)||!items.length) return '';
+    return '<div class="prog-label" style="margin:14px 0 8px;color:'+color+'">'+label+'</div>'
+      +items.map(function(it){
+        return '<div class="guide-card" style="border-left:3px solid '+color+'"><div style="font-size:13px;font-weight:800;margin-bottom:2px">'+esc(it.titulo||'')+'</div>'
+          +'<div style="font-size:12px;color:var(--mute);line-height:1.5">'+esc(it.detalhe||'')+'</div></div>';
+      }).join('');
+  };
+  document.getElementById('backup-body').innerHTML=
+    (d.veredito?'<div class="session-note" style="margin-bottom:4px">'+esc(d.veredito)+'</div>':'')
+    +sec('O QUE ESTÁ FUNCIONANDO', d.progressos, 'var(--good)')
+    +sec('PROBLEMAS', d.problemas, 'var(--accent)')
+    +sec('RECOMENDAÇÕES', d.recomendacoes, 'var(--grav)');
+  document.getElementById('backup-actions').innerHTML=
+    '<button class="btn btn-secondary" onclick="closeAllSheets()">Fechar</button>'
+    +'<button class="btn btn-primary" onclick="closeAllSheets();setActive(\'GUIA\')">Gerar plano com isso</button>';
+  if(!document.getElementById('backup-sheet').classList.contains('show')) openSheetById('backup-sheet');
+}
+
+function reopenAnalysis(){
+  const saved=loadObj(K_ANALYSIS);
+  if(!saved){ showToast('Nenhuma análise salva ainda'); return; }
+  renderAnalysisResult(saved);
+}
+
 // Aba do dia de hoje (quarta é descanso → cai na SEG)
 function todayTabId(){
   const map=['DOM','SEG','TER','QUA','QUI','SEX','SAB'];
@@ -2068,12 +2256,18 @@ function renderAiCard(){
   html+='<div style="font-size:12px;color:var(--mute);margin-bottom:10px">Gera um plano novo com base no seu histórico, medidas e notas — ou importa um treino colado. '
     +(custom?('<b style="color:var(--accent)">Plano IA ativo</b>'+(meta&&meta.generatedAt?' desde '+fmtDate(meta.generatedAt):'')+'.'):'Plano original ativo.')
     +'</div>';
-  html+='<input class="ai-input" type="url" autocomplete="off" placeholder="URL do proxy (recomendado): https://…workers.dev" value="'+esc(proxy)+'" oninput="aiSaveProxy(this.value)">';
-  if(hasProxy){
-    html+='<div style="font-size:11px;color:var(--good);font-weight:700;margin:-2px 0 8px">Proxy ativo — a chave fica no servidor, nada de chave neste aparelho.</div>';
+  if(aiSiteProxy && !proxy){
+    // hospedado no Cloudflare Pages: o proxy é do próprio site, zero configuração
+    html+='<div style="font-size:11px;color:var(--good);font-weight:700;margin:0 0 8px">Proxy do site ativo — a chave mora no servidor. Nada pra configurar aqui.</div>';
     if(key) html+='<button class="reset-link" style="margin:0 auto 8px" onclick="aiWipeKey()">Apagar a chave que ainda está salva neste aparelho</button>';
   } else {
-    html+='<input class="ai-input" type="password" autocomplete="off" placeholder="Ou: chave da API direto aqui (sk-ant-…)" value="'+esc(key)+'" oninput="aiSaveKey(this.value)">';
+    html+='<input class="ai-input" type="url" autocomplete="off" placeholder="URL do proxy (recomendado): https://…workers.dev" value="'+esc(proxy)+'" oninput="aiSaveProxy(this.value)">';
+    if(hasProxy){
+      html+='<div style="font-size:11px;color:var(--good);font-weight:700;margin:-2px 0 8px">Proxy ativo — a chave fica no servidor, nada de chave neste aparelho.</div>';
+      if(key) html+='<button class="reset-link" style="margin:0 auto 8px" onclick="aiWipeKey()">Apagar a chave que ainda está salva neste aparelho</button>';
+    } else {
+      html+='<input class="ai-input" type="password" autocomplete="off" placeholder="Ou: chave da API direto aqui (sk-ant-…)" value="'+esc(key)+'" oninput="aiSaveKey(this.value)">';
+    }
   }
   html+='<textarea class="ai-input" style="min-height:64px;resize:vertical" placeholder="Instruções pro personal (opcional): ex. mais foco em ombro, tirar stiff, sessões de 40 min" oninput="aiSaveInst(this.value)">'+esc(inst)+'</textarea>';
   if(aiBusy){
@@ -2086,8 +2280,9 @@ function renderAiCard(){
   if(custom&&!aiBusy) html+='<button class="reset-link" style="margin:8px auto 0" onclick="restoreDefaultPlan()">Voltar ao plano original</button>';
   if(custom&&meta&&meta.resumo) html+='<div class="session-note" style="margin-top:10px">'+esc(meta.resumo)+'</div>';
   html+='<div style="font-size:10px;color:var(--faint);margin-top:10px">'
-    +(hasProxy?'As chamadas passam pelo seu proxy; a chave mora lá como secret (equivalente do .env).'
-      :'Sem proxy, a chave fica neste aparelho e vai direto pra API da Anthropic. Pra tirar a chave do aparelho, configura o proxy (instruções no README).')
+    +((aiSiteProxy&&!proxy)?'As chamadas passam pelo servidor do próprio site; a chave mora lá como secret (equivalente do .env).'
+      :(hasProxy?'As chamadas passam pelo seu proxy; a chave mora lá como secret (equivalente do .env).'
+      :'Sem proxy, a chave fica neste aparelho e vai direto pra API da Anthropic. Pra tirar a chave do aparelho, configura o proxy (instruções no README).'))
     +' Cada geração custa em torno de US$ 0,30–0,50 (Claude Opus).</div>';
   html+='</div>';
   return html;

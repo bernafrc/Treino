@@ -22,12 +22,25 @@ Não há build step, bundler, npm ou framework. Abrir o `index.html` já é o ap
 
 ## Como publicar / atualizar
 
-O app está hospedado no GitHub Pages. Para atualizar:
+Repositório: `github.com/bernafrc/Treino`. Duas hospedagens possíveis a partir dele:
 
-1. Substituir `index.html` no repositório e fazer commit.
-2. Se mudou o shell do app, subir `CACHE_VERSION` em `sw.js` (ex: `treino-v1` -> `treino-v2`)
+- **Cloudflare Pages (recomendado)**: conectado ao repo via git, faz deploy sozinho a cada
+  push. Vantagem decisiva: serve `functions/api/messages.js` como Pages Function — o proxy
+  da chave da IA no mesmo domínio do app (o app detecta sozinho; secret `ANTHROPIC_API_KEY`
+  em Settings → Variables and Secrets do projeto).
+- **GitHub Pages** (`bernafrc.github.io/Treino`): serve os arquivos estáticos, mas NÃO roda a
+  pasta `functions/` — nele o motor IA precisa de chave no aparelho ou do worker avulso.
+
+Para atualizar:
+
+1. Commit + push no repositório (as duas hospedagens atualizam sozinhas).
+2. Se mudou o shell do app, subir `CACHE_VERSION` em `sw.js` (ex: `treino-v2` -> `treino-v3`)
    para que os usuários recebam a versão nova em vez do cache antigo.
 3. Aguardar ~1 min. O PWA na tela de início pega a atualização sozinho na próxima abertura.
+
+**Migração de aparelho/domínio**: `localStorage` é por domínio. Ao trocar de hospedagem
+(github.io → pages.dev), levar os dados pelo próprio app: HIST → BACKUP → copiar no antigo,
+HIST → IMPORTAR → colar no novo, e adicionar o PWA novo à tela de início.
 
 Rodar localmente:
 
@@ -95,8 +108,13 @@ quarta (`PLAN_DAYS` com QUA opcional em `validatePlanShape`/`normalizePlan`/sche
 - **Importar treino colado (aba GUIA)**: cola um treino em qualquer formato — texto do personal,
   treino gerado em outro chat, ou JSON do próprio app. JSON válido aplica direto (sem API);
   texto livre é convertido pela IA para o formato do plano (preservando exercícios, séries e
-  reps, distribuindo pelos 6 dias e explicando o mapeamento no resumo). Depois do preview e do
+  reps, distribuindo pelos dias e explicando o mapeamento no resumo). Depois do preview e do
   aplicar, o app já cai na aba do dia. Histórico, medidas e recordes não são tocados.
+- **Análise do personal IA (aba HIST)**: escolhe "a partir de quando" (atalhos 30/60/90 dias
+  ou tudo) e a IA analisa as sessões do período série a série: progressos com números,
+  estagnação, desequilíbrios de volume, consistência, dores citadas nas notas. Resultado em
+  veredito/progressos/problemas/recomendações, salvo em `wo_analysis_v1` (reabre sem gastar).
+  A próxima geração de plano lê a última análise automaticamente.
 
 ---
 
@@ -130,11 +148,14 @@ de recusa habilitado (`fallbacks: "default"` + beta `server-side-fallback-2026-0
 nada é aplicado sem confirmação. `WORKOUTS` é `let`: plano salvo em `wo_plan_v1` vence o
 `DEFAULT_WORKOUTS` no boot (com `validatePlanShape` de guarda).
 
-- **Modo proxy (recomendado — chave fora do aparelho).** O campo "URL do proxy" aponta para um
-  Cloudflare Worker ([`proxy/cloudflare-worker.js`](proxy/cloudflare-worker.js), instruções de
-  deploy no topo do arquivo). A chave mora lá como **secret** — o equivalente de `.env` para
-  página estática — e o navegador chama o worker sem credencial nenhuma. `ALLOWED_ORIGINS` no
-  worker limita quem pode usar (GitHub Pages + localhost).
+- **Modo proxy do site (recomendado — zero configuração).** Hospedado no Cloudflare Pages,
+  `functions/api/messages.js` vira a rota `POST /api/messages` no mesmo domínio. O app sonda
+  essa rota no boot (GET → 405 = existe; pulado em `*.github.io`) e usa sozinho. A chave mora
+  como **secret** do projeto Pages — o equivalente de `.env` — e nenhum aparelho guarda nada.
+- **Modo proxy manual.** O campo "URL do proxy" aponta para um Cloudflare Worker avulso
+  ([`proxy/cloudflare-worker.js`](proxy/cloudflare-worker.js), instruções no topo do arquivo).
+  Para quando o app está em hospedagem sem functions (GitHub Pages). URL manual vence a
+  detecção automática.
 - **Modo direto (fallback).** Sem proxy, a chave vai em `localStorage` (`wo_apikey_v1`) e a
   chamada sai direto do navegador com `anthropic-dangerous-direct-browser-access: true` (o que
   libera CORS). Aceitável por ser chave do próprio usuário, mas o proxy é melhor.
