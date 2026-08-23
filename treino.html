@@ -869,7 +869,7 @@ const K_TOMBS = 'wo_tombs_v1';       // ids apagados localmente, pendentes de su
 const K_LASTSYNC = 'wo_lastsync_v1';
 const K_PLANSTAMP = 'wo_planstamp_v1'; // quando o plano ativo mudou por último (pro "mais novo vence")
 const K_DAYMAP = 'wo_daymap_v1';     // troca de treino entre dias válida só na semana corrente
-const APP_BUILD = 'v10';             // manter igual ao CACHE_VERSION do sw.js (treino-vN)
+const APP_BUILD = 'v11';             // manter igual ao CACHE_VERSION do sw.js (treino-vN)
 
 function loadStr(k){ try{return localStorage.getItem(k);}catch(e){return null;} }
 function loadObj(k){ try{const v=localStorage.getItem(k); return v?JSON.parse(v):null;}catch(e){return null;} }
@@ -2141,7 +2141,9 @@ function aiSystemPrompt(){
     +'- info: 1 a 3 frases por exercício explicando por que ele está nesse dia/posição e o que o diferencia dos parecidos do plano (ex: tríceps pulley = cabeça lateral, francês = cabeça longa alongada).\n'
     +'- bar: só para exercícios de barra livre, o peso da barra em kg (20 olímpica, 10 barra W). Omitir em máquinas, halteres e polias.\n'
     +'- resumo: 2 a 4 frases, em português, explicando o que mudou em relação ao plano atual e por quê, com base no histórico.\n\n'
-    +'Use o histórico para calibrar: exercícios estagnados podem ser trocados ou ter esquema de reps ajustado; o que está progredindo bem deve ser mantido. Leve as notas de sessão a sério (dores, sono, incômodos). Responda apenas com o JSON pedido.';
+    +'Use o histórico para calibrar: exercícios estagnados podem ser trocados ou ter esquema de reps ajustado; o que está progredindo bem deve ser mantido. Leve as notas de sessão a sério (dores, sono, incômodos).\n\n'
+    +'MUDANÇA PONTUAL: se as instruções do aluno pedirem uma alteração específica (ex: "troca o exercício 03 de domingo", "tira o stiff"), faça SOMENTE o que foi pedido e reproduza todo o resto do plano atual IDÊNTICO — mesmos nomes, séries, reps, rest, alts, infos e títulos. Nesse caso o resumo deve dizer só o que mudou. Recalibre o plano inteiro apenas quando o aluno não pedir nada específico ou pedir uma revisão geral.\n\n'
+    +'Responda apenas com o JSON pedido.';
 }
 
 function aiHistorySummary(){
