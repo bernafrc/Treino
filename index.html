@@ -821,9 +821,9 @@ const DEFAULT_WORKOUTS = {
       { name: 'Mesa flexora', sets: 4, reps: '8-12',
         info: 'Flexão de joelho isolada: pega as fibras do posterior que o stiff (que trabalha por quadril) não esgota. Stiff + flexora = posterior completo pelos dois ângulos.',
         alts: ['Flexora sentada','Flexora em pé unilateral','Stiff halter','Nordic assistido','Bom dia barra'] },
-      { name: 'Agachamento búlgaro halter', sets: 3, reps: '8-10',
-        info: 'Unilateral de glúteo e quadríceps com pouca carga na coluna. Corrige assimetria e equilíbrio depois dos bilaterais pesados de quarta. Halter: registrar por lado.',
-        alts: ['Elevação pélvica barra','Afundo no smith','Passada com halter','Leg press unilateral','Agachamento sumô halter'] },
+      { name: 'Elevação pélvica barra', sets: 3, reps: '10-12', bar: 20,
+        info: 'O construtor de glúteo do dia: extensão de quadril pura, com pico de contração em cima e zero dominância de quadríceps (que já teve a quarta inteira). Fecha a cadeia posterior junto com stiff e flexora. Meta do personal: 40-50kg.',
+        alts: ['Agachamento búlgaro halter','Elevação pélvica máquina','Ponte de glúteo unilateral','Cadeira abdutora','Terra sumô com halter'] },
       { name: 'Panturrilha sentado', sets: 4, reps: '15-20', finisher: true,
         info: 'Joelho dobrado = sóleo, o músculo por baixo do gastrocnêmio. Complementa a panturrilha em pé de quarta: são músculos diferentes, por isso as duas versões na semana.',
         alts: ['Panturrilha em pé máquina','Panturrilha no leg press','Panturrilha no smith','Panturrilha unilateral halter','Panturrilha burrinho'] },
@@ -844,7 +844,7 @@ const GRAVITON_NAMES = new Set(
 // Rest seconds by exercise. Heavy compounds rest most, finishers least.
 // Exercises may carry their own `rest` (AI-generated plans do); that wins.
 const REST_120 = ['Agachamento','Leg press','Barra fixa (graviton)'];
-const REST_90 = ['Supino inclinado halter (30°)','Supino reto máquina/barra','Supino inclinado máquina','Supino reto halter','Desenvolvimento halter','Remada máquina apoiada','Remada unilateral','Remada baixa triângulo','Stiff controlado','Mesa flexora','Agachamento búlgaro halter'];
+const REST_90 = ['Supino inclinado halter (30°)','Supino reto máquina/barra','Supino inclinado máquina','Supino reto halter','Desenvolvimento halter','Remada máquina apoiada','Remada unilateral','Remada baixa triângulo','Stiff controlado','Mesa flexora','Agachamento búlgaro halter','Elevação pélvica barra'];
 const REST_45_FIN = ['Abdômen máquina/polia','Abdômen infra/polia','Abdômen infra','Panturrilha em pé','Panturrilha sentado'];
 function restSecondsFor(ex){
   if(typeof ex.rest==='number' && ex.rest>=15) return Math.min(300,Math.round(ex.rest));
@@ -869,7 +869,7 @@ const K_TOMBS = 'wo_tombs_v1';       // ids apagados localmente, pendentes de su
 const K_LASTSYNC = 'wo_lastsync_v1';
 const K_PLANSTAMP = 'wo_planstamp_v1'; // quando o plano ativo mudou por último (pro "mais novo vence")
 const K_DAYMAP = 'wo_daymap_v1';     // troca de treino entre dias válida só na semana corrente
-const APP_BUILD = 'v7';              // manter igual ao CACHE_VERSION do sw.js (treino-vN)
+const APP_BUILD = 'v8';              // manter igual ao CACHE_VERSION do sw.js (treino-vN)
 
 function loadStr(k){ try{return localStorage.getItem(k);}catch(e){return null;} }
 function loadObj(k){ try{const v=localStorage.getItem(k); return v?JSON.parse(v):null;}catch(e){return null;} }
