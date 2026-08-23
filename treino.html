@@ -510,10 +510,11 @@
       <div class="input-label" id="lbl-weight">PESO</div>
       <div class="input-row">
         <button class="stepper" onclick="adjustNum('weight', -2.5)">-</button>
-        <input class="num-input" id="in-weight" type="number" inputmode="decimal" step="0.5" min="0" value="0">
+        <input class="num-input" id="in-weight" type="number" inputmode="decimal" step="0.5" min="0" value="0" oninput="updateBarHint()">
         <button class="stepper" onclick="adjustNum('weight', 2.5)">+</button>
       </div>
       <div class="unit" id="unit-weight">KG</div>
+      <div class="unit" id="bar-hint" style="display:none;color:var(--grav);font-weight:700"></div>
     </div>
     <div class="input-block">
       <div class="input-label">REPS</div>
@@ -669,104 +670,148 @@ const DEFAULT_WORKOUTS = {
     title: 'PEITO + TRÍCEPS', sub: 'SEGUNDA', day: '+ ABDÔMEN',
     exercises: [
       { name: 'Supino inclinado halter (30°)', sets: 4, reps: '8-12',
+        info: 'Peito superior (porção clavicular), a prioridade estética do plano — por isso abre o dia, com você descansado. Halter exige estabilização e dá amplitude maior que a barra. O supino reto cuida da massa geral; este enche a parte de cima.',
         alts: ['Supino inclinado barra','Supino inclinado máquina','Supino inclinado smith','Crossover baixo p/ cima','Flexão com pés elevados'] },
       { name: 'Supino reto máquina/barra', sets: 3, reps: '8-12',
+        info: 'Massa geral do peitoral com sobrecarga estável. Vem depois do inclinado porque o superior é prioridade. É o exercício da dupla progressão: fechou 3x12, sobe carga e volta pro piso — estava parado em 50kg há 3 meses.',
         alts: ['Supino reto halter','Supino reto barra','Supino reto smith',{name:'Paralelas (graviton)',graviton:true},'Flexão de braço'] },
       { name: 'Crucifixo máquina/crossover', sets: 3, reps: '10-15',
+        info: 'Isolador: só adução de ombro, sem o tríceps ajudar. Dá alongamento e pico de contração que os supinos não dão. Fecha o peito com carga leve e execução limpa.',
         alts: ['Crucifixo halter banco reto','Peck deck','Crossover polia média','Crucifixo inclinado halter','Crossover alto p/ baixo'] },
       { name: 'Tríceps pulley', sets: 3, reps: '10-15',
+        info: 'Cotovelo fixo, pegada na barra: ênfase na cabeça lateral. É o volume base de tríceps do dia — os supinos já pré-cansaram o músculo, aqui é acabamento com carga.',
         alts: ['Tríceps pulley barra V','Tríceps máquina','Tríceps testa barra W','Tríceps francês halter','Mergulho no banco'] },
       { name: 'Tríceps francês corda', sets: 3, reps: '10-12',
+        info: 'Braço acima da cabeça = cabeça longa do tríceps trabalhando alongada, coisa que o pulley não pega. Pulley + francês se somam porque atacam cabeças diferentes do mesmo músculo.',
         alts: ['Tríceps francês halter 2 mãos','Tríceps testa corda','Tríceps coice halter','Tríceps unilateral polia',{name:'Paralelas (graviton)',graviton:true}] },
       { name: 'Abdômen máquina/polia', sets: 4, reps: '10-15', finisher: true,
+        info: 'Flexão de tronco com carga progressiva — abdômen também cresce com peso, não só com repetição. Finisher: entra no fim pra não roubar energia dos pesados.',
         alts: ['Crunch com anilha','Abdômen infra no banco','Crunch polia alta','Elevação de pernas','Abdômen oblíquo polia'] },
     ],
   },
   TER: {
-    title: 'COSTAS + BÍCEPS', sub: 'TERÇA', day: '',
+    title: 'COSTAS + BÍCEPS', sub: 'TERÇA', day: '+ ABDÔMEN',
     exercises: [
       { name: 'Barra fixa (graviton)', sets: 4, reps: '6-10', graviton: true,
+        info: 'O melhor construtor de dorsal em amplitude completa. No graviton o peso lançado é a AJUDA da máquina: menos kg = você mais forte. Sua escada: 18→15→12→9→6→3→livre, um degrau a cada 1-2 semanas.',
         alts: ['Puxada alta aberta','Puxada neutra máquina','Puxada supinada','Barra fixa livre','Puxada máquina articulada'] },
       { name: 'Remada máquina apoiada', sets: 4, reps: '8-12',
+        info: 'Espessura do meio das costas com o peito apoiado — zero roubo de lombar. Puxada vertical (barra fixa) + remada horizontal = costas completas em dois planos.',
         alts: ['Remada curvada barra','Remada halter unilateral','Remada cavalinho','Remada baixa polia','Remada T máquina'] },
       { name: 'Remada baixa triângulo', sets: 3, reps: '8-12',
+        info: 'Segunda remada, pegada neutra e fechada: mais dorsal baixo e trajeto mais longo. Complementa a remada apoiada, que trabalha mais aberto e pesado.',
         alts: ['Remada baixa barra reta','Remada máquina neutra','Remada halter banco inclinado','Puxada fechada supinada','Remada polia unilateral'] },
       { name: 'Rosca direta', sets: 3, reps: '8-12',
+        info: 'A base do bíceps, pegada supinada. As costas já pré-ativaram o bíceps o treino inteiro — aqui é só finalizar com carga direta.',
         alts: ['Rosca direta barra W','Rosca alternada halter','Rosca polia baixa','Rosca máquina','Rosca 21'] },
       { name: 'Rosca inclinada', sets: 3, reps: '8-10',
+        info: 'Braço atrás do corpo = cabeça longa do bíceps em alongamento, o que a rosca direta não faz. As duas juntas cobrem o músculo inteiro.',
         alts: ['Rosca banco 45° halter','Rosca concentrada','Rosca spider','Rosca bayesian polia','Rosca martelo inclinada'] },
+      { name: 'Abdômen infra', sets: 4, reps: '15-20', finisher: true,
+        info: 'Porção inferior: as pernas sobem em vez do tronco descer. Complementa o crunch de segunda (que flexiona por cima) — dia sem perna tem abdômen.',
+        alts: ['Elevação de pernas banco','Infra na paralela','Crunch polia alta','Abdômen máquina','Infra suspenso na barra'] },
     ],
   },
   QUA: {
     title: 'PERNAS A · QUADRÍCEPS', sub: 'QUARTA', day: '+ PANTURRILHA',
     exercises: [
-      { name: 'Agachamento', sets: 4, reps: '6-10',
+      { name: 'Agachamento', sets: 4, reps: '6-10', bar: 20,
+        info: 'O rei do quadríceps e o movimento mais caro do dia — por isso é o primeiro. Prioridade absoluta: lombar neutra e profundidade constante (a carga sobe 2,5-5kg/semana só enquanto a técnica segurar).',
         alts: ['Agachamento smith','Agachamento hack','Leg press 45','Agachamento búlgaro halter','Agachamento goblet'] },
       { name: 'Leg press', sets: 4, reps: '8-12',
+        info: 'Volume pesado de quadríceps sem exigir o equilíbrio e o core do agachamento. Vem em segundo pra empilhar carga com segurança quando você já aqueceu.',
         alts: ['Leg press horizontal','Agachamento hack','Agachamento smith','Agachamento búlgaro halter','Passada com halter'] },
       { name: 'Extensora', sets: 3, reps: '10-15',
+        info: 'Isolador puro de quadríceps, com pico de contração e zero custo pra lombar. Fecha o dia esgotando o músculo que os compostos já cansaram.',
         alts: ['Extensora unilateral','Agachamento sissy','Leg press pés baixos','Afundo no smith','Agachamento hack pés baixos'] },
       { name: 'Panturrilha em pé', sets: 4, reps: '10-15', finisher: true,
+        info: 'Joelho esticado = gastrocnêmio, a parte da panturrilha que aparece. Panturrilha mora nos dias de perna; a sentada de domingo pega o sóleo (músculo irmão).',
         alts: ['Panturrilha máquina em pé','Panturrilha no leg press','Panturrilha no smith','Panturrilha unilateral halter','Panturrilha sentado'] },
     ],
   },
   QUI: {
     title: 'BRAÇOS', sub: 'QUINTA', day: '+ ABDÔMEN',
     exercises: [
-      { name: 'Rosca direta barra W', sets: 4, reps: '8-12',
+      { name: 'Rosca direta barra W', sets: 4, reps: '8-12', bar: 10,
+        info: 'Dia de braço puro abre pelo básico mais pesado do bíceps. A barra W deixa o punho em ângulo natural — mesma sobrecarga da reta, sem dor de punho.',
         alts: ['Rosca direta barra reta','Rosca halter em pé','Rosca polia barra reta','Rosca máquina','Rosca alternada'] },
       { name: 'Rosca martelo', sets: 3, reps: '8-12',
+        info: 'Pegada neutra = braquial e braquiorradial, os músculos que engrossam o braço por baixo do bíceps. Soma com a rosca W em vez de repetir o estímulo.',
         alts: ['Rosca martelo corda polia','Rosca martelo alternada','Rosca martelo banco inclinado','Rosca inversa barra','Rosca cross-body'] },
       { name: 'Rosca Scott/máquina', sets: 3, reps: '10-15',
+        info: 'Cotovelo travado no apoio: elimina roubo de corpo e mantém tensão no fim do movimento. Fecha o bíceps isolando o que as roscas em pé deixaram passar.',
         alts: ['Rosca Scott barra W','Rosca Scott halter unilateral','Rosca máquina','Rosca spider halter','Rosca concentrada'] },
       { name: 'Tríceps corda', sets: 4, reps: '10-12',
+        info: 'A corda abre no final do movimento = contração completa e mais cabeça lateral. É o volume principal de tríceps de hoje, com braço descansado (diferente de segunda).',
         alts: ['Tríceps pulley barra','Tríceps máquina','Tríceps francês corda','Tríceps unilateral polia','Mergulho no banco'] },
       { name: 'Tríceps testa corda', sets: 3, reps: '10-12',
+        info: 'Cotovelo apontando pra cima = cabeça longa sob alongamento. Par clássico com o tríceps corda: cabeças diferentes do mesmo músculo, por isso os dois no mesmo dia.',
         alts: ['Tríceps testa barra W','Tríceps testa halter','Tríceps francês polia','Tríceps overhead corda',{name:'Paralelas (graviton)',graviton:true}] },
       { name: 'Abdômen infra/polia', sets: 4, reps: '12-15', finisher: true,
+        info: 'Infra com resistência da polia: dá pra progredir carga na porção baixa do abdômen, não só acumular repetição.',
         alts: ['Elevação de pernas banco declinado','Infra na paralela','Crunch polia alta','Abdômen máquina','Elevação de joelhos suspenso'] },
     ],
   },
   SEX: {
-    title: 'OMBROS', sub: 'SEXTA', day: 'DIA CURTO',
+    title: 'OMBROS', sub: 'SEXTA', day: 'DIA CURTO + ABDÔMEN',
     exercises: [
       { name: 'Desenvolvimento halter', sets: 4, reps: '8-12',
+        info: 'O composto do ombro: deltoide anterior e medial com estabilização total. Primeiro e mais pesado do dia — a meta é firmar os 18kg por lado.',
         alts: ['Desenvolvimento máquina','Desenvolvimento barra sentado','Desenvolvimento smith','Desenvolvimento Arnold','Desenvolvimento em pé barra'] },
       { name: 'Elevação lateral', sets: 4, reps: '10-15',
+        info: 'Isolador do deltoide medial — é o que dá largura de ombro. Foco estético do dia, com volume alto de propósito. Se 10kg não passa de 8 reps, volta pra 8-9kg e constrói até 15 limpas.',
         alts: ['Elevação lateral polia','Elevação lateral máquina','Elevação lateral sentado','Elevação lateral inclinado','Remada alta halter'] },
       { name: 'Crucifixo inverso máquina', sets: 4, reps: '12-15',
+        info: 'Deltoide posterior, o mais esquecido dos três: equilibra o ombro por trás, melhora postura e completa o visual 3D. O desenvolvimento e a lateral não pegam essa porção.',
         alts: ['Crucifixo inverso halter inclinado','Crossover invertido polia alta','Face pull corda','Crucifixo inverso banco 30°','Remada alta aberta'] },
       { name: 'Facepull', sets: 3, reps: '12-15',
+        info: 'Posterior + rotadores externos + trapézio baixo: seguro de saúde do ombro de quem faz muito supino. Leve e técnico, sem ego na carga.',
         alts: ['Face pull corda polia alta','Crucifixo inverso polia','Remada alta corda','W-raise banco inclinado','Crucifixo inverso máquina'] },
+      { name: 'Crunch polia alta', sets: 3, reps: '12-15', finisher: true,
+        info: 'Abdômen com carga ajustável fechando o dia curto sem esticar a sessão. Variação ajoelhada do crunch de segunda, com resistência vindo de cima.',
+        alts: ['Abdômen máquina','Crunch com anilha','Abdômen infra no banco','Abdômen oblíquo polia','Elevação de pernas'] },
     ],
   },
   SAB: {
-    title: 'PEITO + COSTAS', sub: 'SÁBADO', day: '2ª FREQUÊNCIA',
+    title: 'PEITO + COSTAS', sub: 'SÁBADO', day: '2ª FREQ + ABDÔMEN',
     exercises: [
       { name: 'Supino inclinado máquina', sets: 4, reps: '8-12',
+        info: 'Segunda frequência de peito da semana. Na máquina: empilha volume no peitoral superior com menos fadiga de estabilização que os halteres de segunda.',
         alts: ['Supino inclinado halter','Supino inclinado barra','Supino inclinado smith','Crossover baixo p/ cima','Flexão com pés elevados'] },
       { name: 'Supino reto halter', sets: 3, reps: '8-12',
+        info: 'Reto com halteres: amplitude maior e cada lado trabalhando por si (corrige assimetria). É variação do reto de segunda, não repetição — registrar o peso POR HALTER.',
         alts: ['Supino reto barra','Supino reto máquina','Supino reto smith','Flexão de braço',{name:'Paralelas (graviton)',graviton:true}] },
       { name: 'Crossover', sets: 3, reps: '10-15',
+        info: 'Isolador no cabo: tensão contínua a série inteira e pico no cruzamento. Fecha o trabalho de peito da semana.',
         alts: ['Peck deck','Crucifixo halter','Crossover polia baixa','Crossover unilateral','Crucifixo inclinado halter'] },
       { name: 'Barra fixa (graviton)', sets: 3, reps: '8-10', graviton: true,
+        info: 'Segunda dose da semana, de propósito: frequência 2x acelera a meta da barra livre. Mesma ajuda de terça — o progresso vem de tirar kg de ajuda, não de somar reps infinitas.',
         alts: ['Puxada alta aberta','Puxada neutra máquina','Puxada supinada','Barra fixa livre','Puxada máquina articulada'] },
       { name: 'Remada unilateral', sets: 3, reps: '8-12',
+        info: 'Um lado por vez: trajeto mais longo, rotação livre do tronco e correção de assimetria entre os lados das costas.',
         alts: ['Remada halter unilateral banco','Remada máquina unilateral','Remada baixa unilateral polia','Remada curvada barra','Remada cavalinho'] },
       { name: 'Pulldown corda', sets: 3, reps: '12-15',
+        info: 'Braço quase esticado = dorsal isolado, sem o bíceps ajudar (ele já trabalhou demais na semana). Finaliza costas com pump e conexão.',
         alts: ['Pulldown barra reta','Pullover halter banco','Puxada neutra','Pulldown unilateral polia','Puxada supinada'] },
+      { name: 'Abdômen oblíquo polia', sets: 3, reps: '12-15', finisher: true,
+        info: 'Rotação e flexão lateral: pega os oblíquos, que o crunch (segunda/sexta) e o infra (terça/quinta) não cobrem. Fecha a semana de abdômen com a porção que faltava.',
+        alts: ['Rotação de tronco polia','Prancha lateral com apoio','Inclinação lateral halter','Abdômen máquina','Crunch polia alta'] },
     ],
   },
   DOM: {
     title: 'PERNAS B · POSTERIOR', sub: 'DOMINGO', day: '+ PANTURRILHA',
     exercises: [
-      { name: 'Stiff controlado', sets: 4, reps: '8-10',
+      { name: 'Stiff controlado', sets: 4, reps: '8-10', bar: 20,
+        info: 'Posterior de coxa em alongamento carregado + glúteo. O movimento é do quadril, a lombar só estabiliza — técnica impecável antes de carga (lembra da nota de junho: lombar). Separado da quarta por 2 dias de propósito.',
         alts: ['Stiff halter','Terra romeno barra','Bom dia barra','Stiff no smith','Flexora sentada'] },
       { name: 'Mesa flexora', sets: 4, reps: '8-12',
+        info: 'Flexão de joelho isolada: pega as fibras do posterior que o stiff (que trabalha por quadril) não esgota. Stiff + flexora = posterior completo pelos dois ângulos.',
         alts: ['Flexora sentada','Flexora em pé unilateral','Stiff halter','Nordic assistido','Bom dia barra'] },
       { name: 'Agachamento búlgaro halter', sets: 3, reps: '8-10',
+        info: 'Unilateral de glúteo e quadríceps com pouca carga na coluna. Corrige assimetria e equilíbrio depois dos bilaterais pesados de quarta. Halter: registrar por lado.',
         alts: ['Elevação pélvica barra','Afundo no smith','Passada com halter','Leg press unilateral','Agachamento sumô halter'] },
       { name: 'Panturrilha sentado', sets: 4, reps: '15-20', finisher: true,
+        info: 'Joelho dobrado = sóleo, o músculo por baixo do gastrocnêmio. Complementa a panturrilha em pé de quarta: são músculos diferentes, por isso as duas versões na semana.',
         alts: ['Panturrilha em pé máquina','Panturrilha no leg press','Panturrilha no smith','Panturrilha unilateral halter','Panturrilha burrinho'] },
     ],
   },
@@ -809,6 +854,7 @@ const K_SYNCTOKEN = 'wo_synctoken_v1'; // código de sincronização (mesmo valo
 const K_TOMBS = 'wo_tombs_v1';       // ids apagados localmente, pendentes de subir (lápides)
 const K_LASTSYNC = 'wo_lastsync_v1';
 const K_PLANSTAMP = 'wo_planstamp_v1'; // quando o plano ativo mudou por último (pro "mais novo vence")
+const K_DAYMAP = 'wo_daymap_v1';     // troca de treino entre dias válida só na semana corrente
 
 function loadStr(k){ try{return localStorage.getItem(k);}catch(e){return null;} }
 function loadObj(k){ try{const v=localStorage.getItem(k); return v?JSON.parse(v):null;}catch(e){return null;} }
@@ -879,6 +925,24 @@ function saveAll(){
 }
 
 // ============ HELPERS ============
+// ---- Troca de treino entre dias ----
+// dayMap remapeia aba → dia do plano (ex: {SEG:'QUA', QUA:'SEG'} = segunda
+// mostra Pernas A e quarta mostra Peito). É uma permutação, vale só para a
+// semana corrente (expira na segunda-feira seguinte). Troca permanente mexe
+// direto no conteúdo do plano (e sincroniza via planStamp).
+function weekId(){
+  const d=new Date(); d.setHours(0,0,0,0);
+  d.setDate(d.getDate()-((d.getDay()+6)%7)); // segunda-feira desta semana
+  return d.toISOString().slice(0,10);
+}
+let dayMap=(function(){
+  const s=loadObj(K_DAYMAP);
+  return (s && s.week===weekId() && s.map) ? s.map : {};
+})();
+function saveDayMap(){ try{ localStorage.setItem(K_DAYMAP, JSON.stringify({week:weekId(), map:dayMap})); }catch(e){} }
+function effDay(tab){ const t=dayMap[tab]; return (t && WORKOUTS[t]) ? t : tab; }
+function tabFor(pd){ for(const t of PLAN_DAYS){ if(WORKOUTS[t] && effDay(t)===pd) return t; } return pd; }
+
 function normAlt(a){ return typeof a==='string' ? {name:a} : a; }
 // Exercício efetivo do slot: o do plano, ou o substituto escolhido hoje.
 // A troca vive em current.swaps e morre quando o treino é finalizado/zerado.
@@ -964,7 +1028,7 @@ function renderStats(){
   const el=document.getElementById('stats');
   if(active==='GUIA'||active==='HIST'||active==='CORPO'){ el.style.visibility='hidden'; return; }
   el.style.visibility='visible';
-  const c=completion(active);
+  const c=completion(effDay(active));
   document.getElementById('stat-pct').textContent=c.pct+'%';
   document.getElementById('stat-done').textContent=c.done+'/'+c.total+' SÉRIES';
 }
@@ -1001,8 +1065,11 @@ function renderExerciseCard(wId,ex,i,isCurrent){
   const gravTag=ex.graviton?'<span class="dot"></span><span class="grav-tag">peso = ajuda</span>':'';
   const cls=(allDone?'done ':'')+(ex.finisher?'finisher ':'')+(ex.swapped?'swapped ':'')+(ex.graviton?'graviton':'');
   const swapNote=ex.swapped?'<div class="swap-note">no lugar de: '+esc(ex.plannedName)+'</div>':'';
-  const hasAlts=(WORKOUTS[wId].exercises[i].alts||[]).length>0;
+  const planned=WORKOUTS[wId].exercises[i];
+  const hasAlts=(planned.alts||[]).length>0;
+  const infoBtn=planned.info?'<button class="swap-btn" style="font-family:Georgia,serif;font-style:italic;font-weight:700" onclick="openExInfo(\''+wId+'\','+i+')" aria-label="Por que este exercício">i</button>':'';
   const swapBtn=hasAlts?'<button class="swap-btn" onclick="openSwap(\''+wId+'\','+i+')" aria-label="Trocar exercício">⇄</button>':'';
+  const btns='<div style="display:flex;flex-direction:column;gap:5px;flex-shrink:0">'+infoBtn+swapBtn+'</div>';
 
   return '<div class="ex '+cls+'" style="animation-delay:'+(i*25)+'ms">'
     +'<div class="ex-head"><div class="ex-num">'+String(i+1).padStart(2,'0')+'</div>'
@@ -1011,18 +1078,23 @@ function renderExerciseCard(wId,ex,i,isCurrent){
     +esc(ex.name)+recBadge+'<span class="chart-icon">📈</span></button>'
     +swapNote
     +'<div class="ex-meta"><span><span class="pill">'+ex.sets+'</span> séries</span><span class="dot"></span><span>'+esc(ex.reps)+' reps</span>'+gravTag+'</div>'
-    +'</div>'+swapBtn+'</div>'
+    +'</div>'+btns+'</div>'
     +lastLine
     +'<div class="sets">'+setsHtml+'</div>'
     +'</div>';
 }
 
-function renderWorkout(wId){
+function renderWorkout(tabId){
+  const wId=effDay(tabId);          // dia do plano exibido nesta aba (pode estar trocado)
   const w=WORKOUTS[wId];
   const isCurrent=current.workoutId===wId;
-  let html='<div class="section-head"><div class="eyebrow">'+esc(w.sub)+'</div><div class="display">'+esc(w.title)+'</div>'+(w.day?'<div class="day-tag">'+esc(w.day)+'</div>':'')+'</div>';
+  const movedTag=(wId!==tabId)?'<span class="day-tag" style="background:var(--grav-soft);color:var(--grav)">⇆ treino de '+PLAN_SUBS[wId]+'</span> ':'';
+  let html='<div class="section-head"><div class="eyebrow">'+esc(PLAN_SUBS[tabId]||w.sub)+'</div><div class="display">'+esc(w.title)+'</div>'
+    +'<div>'+movedTag+(w.day?'<div class="day-tag">'+esc(w.day)+'</div>':'')
+    +' <button class="day-tag" style="border:1px dashed var(--border-strong);background:transparent;color:var(--mute);cursor:pointer" onclick="openDaySwap(\''+tabId+'\')">⇆ trocar o treino do dia</button></div>'
+    +'</div>';
 
-  if(wId==='SAB'){
+  if(tabId==='SAB'){ // pesagem é do sábado (dia da semana), não do treino
     html+='<div class="bioimp-card" onclick="setActive(\'CORPO\')">'
       +'<div><div class="bioimp-title">Sábado: pesagem em jejum</div>'
       +'<div class="bioimp-sub">Toque para registrar peso, %gordura, %massa magra</div></div>'
@@ -1436,9 +1508,114 @@ function applySwap(altIdx){
   } else doIt();
 }
 
+// ============ INFO DO EXERCÍCIO (ⓘ) ============
+function openExInfo(wId,exIdx){
+  const base=WORKOUTS[wId].exercises[exIdx];
+  const ex=effEx(wId,exIdx);
+  document.getElementById('backup-eyebrow').textContent='POR QUE ESTE EXERCÍCIO';
+  document.getElementById('backup-title').textContent=base.name;
+  let html='<div style="font-size:13px;line-height:1.65;color:var(--ink)">'+esc(base.info||'Sem descrição para este exercício.')+'</div>';
+  if(ex.swapped) html+='<div class="session-note" style="margin-top:10px">Hoje você está fazendo "'+esc(ex.name)+'" no lugar dele — a explicação acima é do exercício planejado, que a alternativa substitui com estímulo parecido.</div>';
+  document.getElementById('backup-body').innerHTML=html;
+  document.getElementById('backup-actions').innerHTML='<button class="btn btn-secondary" onclick="closeAllSheets()">Fechar</button>';
+  openSheetById('backup-sheet');
+}
+
+// ============ TROCA DE TREINO ENTRE DIAS ============
+let daySwapCtx=null; // { tabId, mode: 'week'|'perm' }
+
+function openDaySwap(tabId){
+  daySwapCtx={ tabId:tabId, mode:'week' };
+  renderDaySwapBody();
+  openSheetById('backup-sheet');
+}
+
+function renderDaySwapBody(){
+  const ctx=daySwapCtx; if(!ctx) return;
+  const pdHere=effDay(ctx.tabId);
+  document.getElementById('backup-eyebrow').textContent='TROCAR O TREINO DO DIA';
+  document.getElementById('backup-title').textContent=PLAN_SUBS[ctx.tabId]+' hoje: '+(WORKOUTS[pdHere]?WORKOUTS[pdHere].title:'');
+  let html='<div style="font-size:12px;color:var(--mute);margin-bottom:10px">Escolha o treino que você quer fazer neste dia. Os dois dias trocam de lugar — o treino que você ia fazer vai pro dia do outro, nada se perde.</div>';
+  html+='<div class="chart-toggle" style="margin-bottom:10px">'
+    +'<button class="'+(ctx.mode==='week'?'active':'')+'" onclick="daySwapCtx.mode=\'week\';renderDaySwapBody()">SÓ ESTA SEMANA</button>'
+    +'<button class="'+(ctx.mode==='perm'?'active':'')+'" onclick="daySwapCtx.mode=\'perm\';renderDaySwapBody()">PERMANENTE</button>'
+    +'</div>';
+  PLAN_DAYS.forEach(function(pd){
+    if(!WORKOUTS[pd] || pd===pdHere) return;
+    const shownOn=tabFor(pd);
+    html+='<button class="opt-row" onclick="applyDaySwap(\''+pd+'\')">'
+      +'<span>'+esc(WORKOUTS[pd].title)+'</span>'
+      +'<span class="opt-tag">HOJE NA '+PLAN_SUBS[shownOn]+'</span></button>';
+  });
+  html+='<div style="font-size:11px;color:var(--faint);margin-top:6px">"Só esta semana" volta ao normal na segunda-feira. "Permanente" regrava o plano (e sincroniza nos outros aparelhos).</div>';
+  document.getElementById('backup-body').innerHTML=html;
+  document.getElementById('backup-actions').innerHTML='<button class="btn btn-secondary" onclick="closeAllSheets()">Cancelar</button>';
+}
+
+function legsClashAfter(mapLike){
+  // duas "pernas" em dias seguidos? (heurística por título; inclui DOM→SEG)
+  const seq=PLAN_DAYS.filter(function(t){ return WORKOUTS[t]; });
+  const titles=seq.map(function(t){ const pd=(mapLike[t]&&WORKOUTS[mapLike[t]])?mapLike[t]:t; return WORKOUTS[pd].title||''; });
+  for(let i=0;i<titles.length;i++){
+    const a=titles[i], b=titles[(i+1)%titles.length];
+    if(/PERNA/i.test(a) && /PERNA/i.test(b)) return seq[i]+' e '+seq[(i+1)%seq.length];
+  }
+  return null;
+}
+
+function applyDaySwap(pdTarget){
+  const ctx=daySwapCtx; if(!ctx) return;
+  const tabA=ctx.tabId, tabB=tabFor(pdTarget);
+  const pdA=effDay(tabA);
+  const doWeek=function(){
+    const a=dayMap[tabA]||tabA, b=dayMap[tabB]||tabB;
+    dayMap[tabA]=b; dayMap[tabB]=a;
+    if(dayMap[tabA]===tabA) delete dayMap[tabA];
+    if(dayMap[tabB]===tabB) delete dayMap[tabB];
+    saveDayMap(); closeAllSheets(); render();
+    showToast(PLAN_SUBS[tabA]+' agora: '+WORKOUTS[effDay(tabA)].title);
+  };
+  const doPerm=function(){
+    dayMap={}; saveDayMap(); // troca permanente zera as trocas da semana
+    // nunca mutar o DEFAULT_WORKOUTS: o "voltar ao plano original" depende dele intacto
+    if(WORKOUTS===DEFAULT_WORKOUTS) WORKOUTS=JSON.parse(JSON.stringify(DEFAULT_WORKOUTS));
+    const A=WORKOUTS[tabA], B=WORKOUTS[pdTarget];
+    const tmp={title:A.title, day:A.day, exercises:A.exercises};
+    A.title=B.title; A.day=B.day; A.exercises=B.exercises;
+    B.title=tmp.title; B.day=tmp.day; B.exercises=tmp.exercises;
+    try{
+      localStorage.setItem(K_PLAN, JSON.stringify(WORKOUTS));
+      localStorage.setItem(K_PLANSTAMP, new Date().toISOString());
+    }catch(e){}
+    if(current.workoutId===tabA||current.workoutId===pdTarget) current={ workoutId:null, startedAt:null, sets:{}, note:'', swaps:{} };
+    saveAll(); closeAllSheets(); render();
+    showToast('Plano regravado: '+PLAN_SUBS[tabA]+' agora é '+WORKOUTS[tabA].title);
+    queueSync();
+  };
+  const run=(ctx.mode==='perm')?doPerm:doWeek;
+
+  // avisos: perna em dias seguidos e treino em andamento (na troca permanente)
+  let warns=[];
+  if(ctx.mode==='week'){
+    const m=Object.assign({},dayMap);
+    const a=m[tabA]||tabA, b=m[tabB]||tabB; m[tabA]=b; m[tabB]=a;
+    const clash=legsClashAfter(m);
+    if(clash) warns.push('vai ficar perna em dias seguidos ('+clash+')');
+  } else {
+    const hasSets=current.workoutId&&(current.workoutId===tabA||current.workoutId===pdTarget)&&Object.values(current.sets).some(function(s){return s.done;});
+    if(hasSets) warns.push('o treino em andamento será zerado');
+    const m={}; m[tabA]=pdTarget; m[pdTarget]=tabA; // simulação aproximada pós-troca
+    const clash=legsClashAfter(m);
+    if(clash) warns.push('vai ficar perna em dias seguidos ('+clash+')');
+  }
+  if(warns.length) askConfirm('Atenção: '+warns.join(' e ')+'. Trocar mesmo assim?', run, 'Trocar');
+  else run();
+}
+
 function _openSetSheet(wId,exIdx,setIdx){
   const ex=effEx(wId,exIdx);
-  activeSetCtx={ exIdx, setIdx, exName:ex.name, totalSets:ex.sets, graviton:!!ex.graviton };
+  const barW=ex.swapped?0:(WORKOUTS[wId].exercises[exIdx].bar||0); // alt trocada pode não ter barra
+  activeSetCtx={ exIdx, setIdx, exName:ex.name, totalSets:ex.sets, graviton:!!ex.graviton, bar:barW };
 
   document.getElementById('sheet-eyebrow').textContent=ex.name.toUpperCase()+' · SÉRIE '+(setIdx+1)+'/'+ex.sets;
   document.getElementById('sheet-title').textContent=ex.graviton?'Registrar série (peso = ajuda)':'Registrar série';
@@ -1459,6 +1636,7 @@ function _openSetSheet(wId,exIdx,setIdx){
   }
   document.getElementById('in-weight').value=pw;
   document.getElementById('in-reps').value=pr;
+  updateBarHint();
 
   const last=lastSessionForExercise(ex.name);
   const prev=document.getElementById('sheet-prev');
@@ -1527,6 +1705,21 @@ function adjustNum(field,delta){
   v=Math.max(0,v+delta);
   if(field==='weight') v=Math.round(v*2)/2; else v=Math.round(v);
   el.value=v;
+  if(field==='weight') updateBarHint();
+}
+
+// Exercícios de barra (ex.bar = peso da barra): mostra a conta anilhas/lado
+// a partir do TOTAL digitado. O histórico continua guardando o total.
+function updateBarHint(){
+  const el=document.getElementById('bar-hint');
+  if(!el) return;
+  const bar=(activeSetCtx&&activeSetCtx.bar)||0;
+  if(!bar){ el.style.display='none'; return; }
+  el.style.display='block';
+  const total=parseFloat(document.getElementById('in-weight').value)||0;
+  if(total<=bar){ el.textContent='barra tem '+bar+'kg — digite o TOTAL com barra'; return; }
+  const plates=total-bar;
+  el.textContent='= barra '+bar+' + '+fmtWeight(plates)+'kg de anilhas ('+fmtWeight(Math.round(plates/2*10)/10)+'/lado)';
 }
 
 function saveSet(){
@@ -1576,10 +1769,48 @@ function finalizeWorkout(wId){
     if(sets.length>0) done.push({name:effEx(wId,i).name,sets});
   });
   if(done.length===0){ showToast('Nada para finalizar ainda'); return; }
-  history.push({ id:'sess_'+Date.now(), workoutId:wId, startedAt:current.startedAt, completedAt:new Date().toISOString(), exercises:done, note:(current.note||'').trim() });
+  const sess={ id:'sess_'+Date.now(), workoutId:wId, startedAt:current.startedAt, completedAt:new Date().toISOString(), exercises:done, note:(current.note||'').trim() };
+  history.push(sess);
   current={ workoutId:null, startedAt:null, sets:{}, note:'', swaps:{} };
-  active='HIST'; saveAll(); showToast('Treino salvo no histórico'); render();
+  active='HIST'; saveAll(); render();
   queueSync();
+  openWorkoutSummary(sess);
+}
+
+// ============ RESUMO PÓS-TREINO (copiar p/ Google Health etc) ============
+function summaryTag(name, slot){
+  if(/graviton/i.test(name)||GRAVITON_NAMES.has(name)) return ' (graviton: peso = ajuda da máquina)';
+  if(slot&&slot.bar) return ' (peso total, barra de '+slot.bar+'kg incluída)';
+  if(/halter/i.test(name)) return ' (halter, peso por lado)';
+  return '';
+}
+
+function buildSummaryText(sess){
+  const w=WORKOUTS[sess.workoutId];
+  const lines=[];
+  const dur=(sess.startedAt&&sess.completedAt)?Math.round((new Date(sess.completedAt)-new Date(sess.startedAt))/60000):null;
+  const totalSets=sess.exercises.reduce(function(a,e){ return a+e.sets.length; },0);
+  lines.push('TREINO '+sess.workoutId+(w?' · '+w.title:'')+' — '+fmtDate(sess.completedAt));
+  lines.push((dur?('Duração: '+dur+' min · '):'')+'Volume: '+Math.round(sessionVolume(sess))+' kg · '+totalSets+' séries');
+  lines.push('');
+  sess.exercises.forEach(function(e){
+    const slot=w?w.exercises.find(function(x){ return x.name===e.name; }):null;
+    lines.push(e.name+summaryTag(e.name,slot));
+    lines.push('  '+e.sets.map(function(s,i){ return 'S'+(i+1)+' '+fmtWeight(s.weight)+'kg×'+s.reps; }).join(' · '));
+  });
+  if(sess.note) lines.push('\nNota: '+sess.note);
+  return lines.join('\n');
+}
+
+function openWorkoutSummary(sess){
+  document.getElementById('backup-eyebrow').textContent='RESUMO DO TREINO';
+  document.getElementById('backup-title').textContent='Treino salvo — copie se quiser registrar fora';
+  document.getElementById('backup-body').innerHTML=
+    '<textarea class="ta" id="sum-ta" readonly onclick="this.select()" style="min-height:200px">'+esc(buildSummaryText(sess))+'</textarea>';
+  document.getElementById('backup-actions').innerHTML=
+    '<button class="btn btn-secondary" onclick="closeAllSheets()">Fechar</button>'
+    +'<button class="btn btn-primary" onclick="copyText(\'sum-ta\')">Copiar</button>';
+  openSheetById('backup-sheet');
 }
 
 function resetCurrent(wId){
@@ -1662,8 +1893,10 @@ function openBackup(){
     +'<button class="btn btn-primary" onclick="copyBackup()">Copiar</button>';
   openSheetById('backup-sheet');
 }
-function copyBackup(){
-  const ta=document.getElementById('backup-ta');
+function copyBackup(){ copyText('backup-ta'); }
+function copyText(id){
+  const ta=document.getElementById(id);
+  if(!ta) return;
   ta.focus(); ta.select(); ta.setSelectionRange(0,999999);
   let ok=false;
   try{ ok=document.execCommand('copy'); }catch(e){}
@@ -1750,6 +1983,8 @@ function planSchema(){
       rest:{type:'integer'},
       finisher:{type:'boolean'},
       graviton:{type:'boolean'},
+      info:{type:'string'},
+      bar:{type:'integer'},
       alts:{type:'array',items:{
         type:'object',
         properties:{ name:{type:'string'}, graviton:{type:'boolean'} },
@@ -1792,6 +2027,8 @@ function aiSystemPrompt(){
     +'- Cada dia: title (ex: "PEITO + TRÍCEPS", máx 25 caracteres), day (complemento, ex: "+ ABDÔMEN"), exercises na ordem de execução com finishers por último.\n'
     +'- Cada exercício: sets (2 a 5), reps como faixa (ex "8-10"), rest em segundos (120 compostos pesados, 90 compostos médios, 60 isoladores, 45 finishers), finisher true só para abdômen/panturrilha, e 4 a 6 alts (alternativas similares, incluindo variações de equipamento: barra, halter, máquina, polia).\n'
     +'- graviton: true SOMENTE para exercícios em máquina assistida (graviton), onde o peso lançado é a AJUDA da máquina (menos peso = mais forte). Ex: barra fixa no graviton, paralelas no graviton. Puxada na polia NÃO é graviton.\n'
+    +'- info: 1 a 3 frases por exercício explicando por que ele está nesse dia/posição e o que o diferencia dos parecidos do plano (ex: tríceps pulley = cabeça lateral, francês = cabeça longa alongada).\n'
+    +'- bar: só para exercícios de barra livre, o peso da barra em kg (20 olímpica, 10 barra W). Omitir em máquinas, halteres e polias.\n'
     +'- resumo: 2 a 4 frases, em português, explicando o que mudou em relação ao plano atual e por quê, com base no histórico.\n\n'
     +'Use o histórico para calibrar: exercícios estagnados podem ser trocados ou ter esquema de reps ajustado; o que está progredindo bem deve ser mantido. Leve as notas de sessão a sério (dores, sono, incômodos). Responda apenas com o JSON pedido.';
 }
@@ -1958,6 +2195,8 @@ function normalizePlan(raw){
       if(typeof e.rest==='number'&&isFinite(e.rest)) o.rest=Math.max(30,Math.min(240,Math.round(e.rest)));
       if(e.finisher===true) o.finisher=true;
       if(e.graviton===true) o.graviton=true;
+      if(typeof e.info==='string'&&e.info.trim()) o.info=e.info.trim().slice(0,400);
+      if(typeof e.bar==='number'&&isFinite(e.bar)&&e.bar>=5&&e.bar<=40) o.bar=Math.round(e.bar);
       const alts=Array.isArray(e.alts)?e.alts.slice(0,6):[];
       o.alts=alts.map(function(a){
         a=normAlt(a);
@@ -2012,6 +2251,8 @@ function aiConvertSystemPrompt(){
     +'- finisher: true para abdômen/panturrilha no fim do treino.\n'
     +'- graviton: true SOMENTE para exercícios em máquina assistida (graviton/assistida), onde o peso lançado é a ajuda. Puxada na polia NÃO é graviton.\n'
     +'- alts: gere 4 a 6 alternativas similares por exercício (variações de barra/halter/máquina/polia), mesmo que o texto não traga.\n'
+    +'- info: gere 1 a 3 frases por exercício explicando por que ele está naquele dia e o que o diferencia dos parecidos, mesmo que o texto não traga.\n'
+    +'- bar: só para exercícios de barra livre, peso da barra em kg (20 olímpica, 10 W); omitir nos demais.\n'
     +'- title de cada dia: grupos trabalhados (ex "PEITO + TRÍCEPS", máx 25 caracteres). day: complemento curto (ex "+ ABDÔMEN") ou string vazia.\n'
     +'- resumo: 2 a 4 frases dizendo como o texto foi mapeado e o que foi assumido.\n\n'
     +'Responda apenas com o JSON pedido.';

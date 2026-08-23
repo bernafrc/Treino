@@ -98,6 +98,23 @@ quarta (`PLAN_DAYS` com QUA opcional em `validatePlanShape`/`normalizePlan`/sche
 - **Histórico**: sessões com volume, notas e detalhamento por exercício.
 - **Backup**: exportar/importar via texto JSON (copiar e colar).
 - **Exportar PDF**: gera um relatório e chama a impressão nativa (no iOS: Compartilhar > Salvar em PDF).
+- **Troca de treino entre dias (⇆ no topo do dia)**: em qualquer dia dá pra fazer outro treino
+  da semana — os dois dias trocam de lugar (nada some). Modo "só esta semana" usa `wo_daymap_v1`
+  (permutação aba→dia do plano, expira na segunda seguinte, local ao aparelho); modo
+  "permanente" regrava o plano (clonando `DEFAULT_WORKOUTS` antes de mutar) e sincroniza.
+  Avisa se a troca colar perna com perna (heurística /PERNA/ no título, incluindo DOM→SEG).
+  O histórico grava o `workoutId` do treino FEITO (dia do plano), não o dia da semana — os
+  deltas de volume continuam comparando treino com treino.
+- **ⓘ por exercício**: campo `info` explica por que o exercício está naquele dia e o que o
+  diferencia dos parecidos. Planos da IA vêm com `info` gerado.
+- **Peso da barra**: exercícios de barra livre têm `bar` (20 olímpica, 10 W); o registro da
+  série mostra a conta "barra + anilhas (X/lado)" a partir do total digitado. O histórico
+  segue guardando o total. Na troca por alternativa, a dica some (a alt pode não ser barra).
+- **Resumo pós-treino**: ao finalizar, abre um resumo copiável (exercício, marcação de
+  halter-por-lado / total-com-barra / graviton-ajuda, séries, volume, duração) pra colar no
+  Google Health ou onde quiser.
+- **Abdômen e panturrilha**: abdômen como finisher em TODO dia sem perna (SEG/TER/QUI/SEX/SAB,
+  tipos rotacionados), panturrilha nos dias de perna (QUA em pé/gastrocnêmio, DOM sentado/sóleo).
 - **Troca de exercício na hora (⇄)**: cada exercício tem 4-6 alternativas similares (`alts`),
   incluindo variações de equipamento (barra/halter/máquina/polia). A troca vale só para o dia
   (vive em `current.swaps`, morre ao finalizar/zerar) e o histórico grava o nome do exercício
