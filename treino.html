@@ -505,6 +505,20 @@
     <span id="sheet-prev-label">Última vez nesta série</span>
     <strong id="sheet-prev-val"></strong>
   </div>
+  <!-- Equipamento usado na série (opcional) + peso da barra editável -->
+  <div id="eq-row" style="display:none;margin-bottom:12px">
+    <div class="input-label" style="margin-bottom:6px">EQUIPAMENTO · OPCIONAL</div>
+    <div class="chart-toggle" id="eq-chips" style="margin-bottom:0"></div>
+    <div id="barw-row" class="input-block" style="display:none;margin-top:8px">
+      <div class="input-label">PESO DA BARRA</div>
+      <div class="input-row">
+        <button class="stepper" onclick="adjustBarW(-1)">-</button>
+        <input class="num-input" id="in-barw" type="number" inputmode="decimal" step="0.5" min="0" value="20" oninput="onBarWInput()">
+        <button class="stepper" onclick="adjustBarW(1)">+</button>
+      </div>
+      <div class="unit">KG · a barra muda conforme a academia</div>
+    </div>
+  </div>
   <div class="input-grid">
     <div class="input-block">
       <div class="input-label" id="lbl-weight">PESO</div>
@@ -1191,7 +1205,12 @@ function renderHistory(){
     }
     const exHtml=sess.exercises.map(e=>{
       const exVol=exerciseVolume(e.sets);
-      const setsStr=e.sets.map((s,i)=>'<span class="se-set">S'+(i+1)+' <strong>'+fmtWeight(s.weight)+'×'+s.reps+'</strong></span>').join('');
+      const eqMark=s=>{
+        if(!s.eq) return '';
+        const m={barra:'b'+(s.barW?fmtWeight(s.barW):''),smith:'sm'+(s.barW?fmtWeight(s.barW):''),halter:'h',maquina:'mq',polia:'pl'};
+        return m[s.eq]?'<span style="color:var(--faint);font-size:9px"> '+m[s.eq]+'</span>':'';
+      };
+      const setsStr=e.sets.map((s,i)=>'<span class="se-set">S'+(i+1)+' <strong>'+fmtWeight(s.weight)+'×'+s.reps+'</strong>'+eqMark(s)+'</span>').join('');
       return '<div class="se-ex"><div class="se-ex-head"><div class="se-ex-name">'+esc(e.name)+'</div><div class="se-ex-vol">'+fmtVol(exVol)+' KG</div></div><div class="se-ex-sets">'+setsStr+'</div></div>';
     }).join('');
     const sessId='sess-'+(sess.id||origIdx);
@@ -1612,30 +1631,85 @@ function applyDaySwap(pdTarget){
   else run();
 }
 
+// ---- Equipamento da série ----
+const EQ_OPTS=[
+  {id:'barra',label:'BARRA'},{id:'smith',label:'SMITH'},{id:'halter',label:'HALTER'},
+  {id:'maquina',label:'MÁQUINA'},{id:'polia',label:'POLIA'}
+];
+function inferEq(name){
+  const n=name.toLowerCase();
+  if(n.includes('halter')) return 'halter';
+  if(n.includes('smith')) return 'smith';
+  if(n.includes('máquina')&&n.includes('barra')) return null; // ambíguo: usuário escolhe
+  if(n.includes('polia')||n.includes('pulley')||n.includes('pulldown')||n.includes('crossover')||n.includes('facepull')||n.includes('corda')) return 'polia';
+  if(n.includes('máquina')||n.includes('extensora')||n.includes('flexora')||n.includes('peck deck')||n.includes('leg press')) return 'maquina';
+  if(n.includes('barra')&&!n.includes('barra fixa')) return 'barra';
+  return null;
+}
+function defaultBarW(exName, plannedBar){
+  const m=loadObj('wo_barw_v1')||{};
+  if(typeof m[exName]==='number') return m[exName]; // última barra usada neste exercício
+  if(plannedBar) return plannedBar;
+  return /\bW\b/i.test(exName)?10:20;
+}
+function renderEqChips(){
+  const el=document.getElementById('eq-chips'); if(!el||!activeSetCtx) return;
+  el.innerHTML=EQ_OPTS.map(function(o){
+    return '<button class="'+(activeSetCtx.eq===o.id?'active':'')+'" onclick="setEq(\''+o.id+'\')">'+o.label+'</button>';
+  }).join('');
+  const showBar=activeSetCtx.eq==='barra'||activeSetCtx.eq==='smith';
+  document.getElementById('barw-row').style.display=showBar?'block':'none';
+  if(showBar) document.getElementById('in-barw').value=activeSetCtx.barW;
+}
+function setEq(id){
+  if(!activeSetCtx) return;
+  activeSetCtx.eq=(activeSetCtx.eq===id)?null:id; // tocar de novo desmarca
+  renderEqChips(); updateBarHint();
+}
+function adjustBarW(d){
+  const el=document.getElementById('in-barw');
+  const v=Math.max(0,Math.round(((parseFloat(el.value)||0)+d)*2)/2);
+  el.value=v;
+  if(activeSetCtx) activeSetCtx.barW=v;
+  updateBarHint();
+}
+function onBarWInput(){
+  if(activeSetCtx) activeSetCtx.barW=parseFloat(document.getElementById('in-barw').value)||0;
+  updateBarHint();
+}
+
 function _openSetSheet(wId,exIdx,setIdx){
   const ex=effEx(wId,exIdx);
-  const barW=ex.swapped?0:(WORKOUTS[wId].exercises[exIdx].bar||0); // alt trocada pode não ter barra
-  activeSetCtx={ exIdx, setIdx, exName:ex.name, totalSets:ex.sets, graviton:!!ex.graviton, bar:barW };
+  const planned=WORKOUTS[wId].exercises[exIdx];
+  activeSetCtx={ exIdx, setIdx, exName:ex.name, totalSets:ex.sets, graviton:!!ex.graviton, eq:null, barW:defaultBarW(ex.name, ex.swapped?0:planned.bar) };
 
   document.getElementById('sheet-eyebrow').textContent=ex.name.toUpperCase()+' · SÉRIE '+(setIdx+1)+'/'+ex.sets;
   document.getElementById('sheet-title').textContent=ex.graviton?'Registrar série (peso = ajuda)':'Registrar série';
   document.getElementById('lbl-weight').textContent=ex.graviton?'AJUDA':'PESO';
 
   const existing=getSet(exIdx,setIdx);
-  let pw=0, pr=0;
-  if(existing){ pw=existing.weight; pr=existing.reps; document.getElementById('btn-clear').style.display='block'; }
+  let pw=0, pr=0, peq=null;
+  if(existing){
+    pw=existing.weight; pr=existing.reps; peq=existing.eq||null;
+    if(existing.barW) activeSetCtx.barW=existing.barW;
+    document.getElementById('btn-clear').style.display='block';
+  }
   else {
     const prevSet=setIdx>0?getSet(exIdx,setIdx-1):null;
-    if(prevSet){ pw=prevSet.weight; pr=prevSet.reps; }
+    if(prevSet){ pw=prevSet.weight; pr=prevSet.reps; peq=prevSet.eq||null; if(prevSet.barW) activeSetCtx.barW=prevSet.barW; }
     else {
       const last=lastSessionForExercise(ex.name);
-      if(last&&last.sets[setIdx]){ pw=last.sets[setIdx].weight; pr=last.sets[setIdx].reps; }
-      else if(last&&last.sets.length>0){ pw=last.sets[0].weight; pr=last.sets[0].reps; }
+      const ls=last?(last.sets[setIdx]||last.sets[0]):null;
+      if(ls){ pw=ls.weight; pr=ls.reps; peq=ls.eq||null; if(ls.barW) activeSetCtx.barW=ls.barW; }
     }
     document.getElementById('btn-clear').style.display='none';
   }
+  activeSetCtx.eq=peq||inferEq(ex.name);
   document.getElementById('in-weight').value=pw;
   document.getElementById('in-reps').value=pr;
+  // graviton não tem equipamento a marcar: o peso já é a ajuda da máquina
+  document.getElementById('eq-row').style.display=ex.graviton?'none':'block';
+  if(!ex.graviton) renderEqChips();
   updateBarHint();
 
   const last=lastSessionForExercise(ex.name);
@@ -1713,13 +1787,14 @@ function adjustNum(field,delta){
 function updateBarHint(){
   const el=document.getElementById('bar-hint');
   if(!el) return;
-  const bar=(activeSetCtx&&activeSetCtx.bar)||0;
+  const usesBar=activeSetCtx&&(activeSetCtx.eq==='barra'||activeSetCtx.eq==='smith');
+  const bar=usesBar?(activeSetCtx.barW||0):0;
   if(!bar){ el.style.display='none'; return; }
   el.style.display='block';
   const total=parseFloat(document.getElementById('in-weight').value)||0;
-  if(total<=bar){ el.textContent='barra tem '+bar+'kg — digite o TOTAL com barra'; return; }
+  if(total<=bar){ el.textContent='barra tem '+fmtWeight(bar)+'kg — digite o TOTAL com barra'; return; }
   const plates=total-bar;
-  el.textContent='= barra '+bar+' + '+fmtWeight(plates)+'kg de anilhas ('+fmtWeight(Math.round(plates/2*10)/10)+'/lado)';
+  el.textContent='= barra '+fmtWeight(bar)+' + '+fmtWeight(plates)+'kg de anilhas ('+fmtWeight(Math.round(plates/2*10)/10)+'/lado)';
 }
 
 function saveSet(){
@@ -1734,16 +1809,29 @@ function saveSet(){
   const isGrav = activeSetCtx.graviton;
   const exName = activeSetCtx.exName;
 
+  // registro da série: peso, reps e (opcional) equipamento + peso da barra
+  const entry={weight:w,reps:r,done:true};
+  if(!isGrav && activeSetCtx.eq){
+    entry.eq=activeSetCtx.eq;
+    if((entry.eq==='barra'||entry.eq==='smith') && activeSetCtx.barW>0){
+      entry.barW=activeSetCtx.barW;
+      try{ // memoriza a barra usada neste exercício pra próxima vez
+        const m=loadObj('wo_barw_v1')||{}; m[exName]=activeSetCtx.barW;
+        localStorage.setItem('wo_barw_v1', JSON.stringify(m));
+      }catch(e){}
+    }
+  }
+
   if(isGrav){
     const prevMin=minWeightForExercise(exName);
-    current.sets[key]={weight:w,reps:r,done:true};
+    current.sets[key]=entry;
     saveAll(); closeAllSheets(); render();
     startRest(restSecs);
     if(prevMin!==null && w<prevMin) showToast('Menos ajuda que antes: '+fmtWeight(w)+'kg');
     return;
   }
   const max=maxWeightForExercise(exName);
-  current.sets[key]={weight:w,reps:r,done:true};
+  current.sets[key]=entry;
   const isPR=w>max&&w>0;
   saveAll(); closeAllSheets(); render();
   startRest(restSecs);
@@ -1764,7 +1852,14 @@ function finalizeWorkout(wId){
   const done=[];
   w.exercises.forEach((ex,i)=>{
     const sets=[];
-    for(let s=0;s<ex.sets;s++){ const d=getSet(i,s); if(d&&d.done) sets.push({weight:d.weight,reps:d.reps}); }
+    for(let s=0;s<ex.sets;s++){
+      const d=getSet(i,s);
+      if(d&&d.done){
+        const rec={weight:d.weight,reps:d.reps};
+        if(d.eq){ rec.eq=d.eq; if(d.barW) rec.barW=d.barW; }
+        sets.push(rec);
+      }
+    }
     // salva com o nome do exercício realmente feito (troca do dia, se houver)
     if(sets.length>0) done.push({name:effEx(wId,i).name,sets});
   });
@@ -1778,6 +1873,15 @@ function finalizeWorkout(wId){
 }
 
 // ============ RESUMO PÓS-TREINO (copiar p/ Google Health etc) ============
+function eqLabel(s){
+  if(!s.eq) return '';
+  if(s.eq==='barra') return 'barra'+(s.barW?' de '+fmtWeight(s.barW)+'kg':'')+', peso total';
+  if(s.eq==='smith') return 'smith'+(s.barW?' (barra '+fmtWeight(s.barW)+'kg)':'')+', peso total';
+  if(s.eq==='halter') return 'halter, peso por lado';
+  if(s.eq==='maquina') return 'máquina';
+  if(s.eq==='polia') return 'polia';
+  return '';
+}
 function summaryTag(name, slot){
   if(/graviton/i.test(name)||GRAVITON_NAMES.has(name)) return ' (graviton: peso = ajuda da máquina)';
   if(slot&&slot.bar) return ' (peso total, barra de '+slot.bar+'kg incluída)';
@@ -1795,8 +1899,14 @@ function buildSummaryText(sess){
   lines.push('');
   sess.exercises.forEach(function(e){
     const slot=w?w.exercises.find(function(x){ return x.name===e.name; }):null;
-    lines.push(e.name+summaryTag(e.name,slot));
-    lines.push('  '+e.sets.map(function(s,i){ return 'S'+(i+1)+' '+fmtWeight(s.weight)+'kg×'+s.reps; }).join(' · '));
+    const eqs=[...new Set(e.sets.map(eqLabel).filter(Boolean))];
+    // equipamento registrado nas séries vence a heurística por nome
+    const tag=eqs.length===1?' ('+eqs[0]+')':(eqs.length===0?summaryTag(e.name,slot):'');
+    lines.push(e.name+tag);
+    lines.push('  '+e.sets.map(function(s,i){
+      const suf=(eqs.length>1&&eqLabel(s))?' ('+eqLabel(s)+')':'';
+      return 'S'+(i+1)+' '+fmtWeight(s.weight)+'kg×'+s.reps+suf;
+    }).join(' · '));
   });
   if(sess.note) lines.push('\nNota: '+sess.note);
   return lines.join('\n');
