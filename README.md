@@ -132,16 +132,19 @@ quarta (`PLAN_DAYS` com QUA opcional em `validatePlanShape`/`normalizePlan`/sche
   estagnação, desequilíbrios de volume, consistência, dores citadas nas notas. Resultado em
   veredito/progressos/problemas/recomendações, salvo em `wo_analysis_v1` (reabre sem gastar).
   A próxima geração de plano lê a última análise automaticamente.
-- **Fitbit (aba GUIA)**: OAuth guardado no servidor (Durable Object) — nenhum token no
-  aparelho. Rotas do worker: `/api/fitbit/authurl` (com cookie de state), `/callback`
-  (troca o code e salva), `/status`, `/weight` (peso+%gordura dos últimos ≤31 dias, unidades
-  métricas via `Accept-Language: pt_BR`), `/activity` (registra musculação com
-  `activityName`+`manualCalories`≈6kcal/min), `/unlink`. Todas menos o callback exigem o
-  `x-sync-token`. Refresh token do Fitbit é de uso único — renovação acontece dentro do DO
-  (single-thread, sem corrida). Secrets: `FITBIT_CLIENT_ID`/`FITBIT_CLIENT_SECRET`
-  (app pessoal em dev.fitbit.com, redirect `<origem>/api/fitbit/callback`). No app: puxar
-  peso pro CORPO (dias já registrados localmente vencem) e envio automático do treino
-  finalizado como atividade.
+- **Google Health / Fitbit (aba GUIA)**: a plataforma dev do Fitbit foi absorvida pelo Google
+  (cadastro no Google Cloud Console, API `health.googleapis.com`). OAuth do Google com
+  `access_type=offline&prompt=consent` (garante refresh_token; o Google NÃO rotaciona o
+  refresh). Scopes: `googlehealth.health_metrics_and_measurements.readonly` +
+  `googlehealth.activity_and_fitness.writeonly`. Rotas do worker (nomes /api/fitbit/* mantidos):
+  authurl/callback/status/weight/activity/unlink — todas menos o callback exigem `x-sync-token`;
+  tokens vivem no Durable Object. Peso: GET `/v4/users/me/dataTypes/weight/dataPoints` com
+  filter `weight.sample_time.physical_time >= ...` (fallback sem filter se 400), `weightGrams`
+  → kg; gordura idem em `body-fat`. Treino: PATCH
+  `/v4/users/me/dataTypes/exercise/dataPoints/{id-proprio}` com `exerciseType:
+  STRENGTH_TRAINING`, `activeDuration: "Ns"`, `metricsSummary.caloriesKcal` (~6kcal/min).
+  Secrets: `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`. App em modo "Testing" no consent screen:
+  refresh de 7 dias (publicar em produção resolve).
 - **Histórico na nuvem (aba GUIA)**: treinos, medidas, plano e análise sincronizados entre
   aparelhos via `POST /api/sync` no worker (Durable Object SQLite, instância única "main").
   Autenticação por código: secret `SYNC_TOKEN` no worker + o mesmo código colado em cada

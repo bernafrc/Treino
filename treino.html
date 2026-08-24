@@ -869,7 +869,7 @@ const K_TOMBS = 'wo_tombs_v1';       // ids apagados localmente, pendentes de su
 const K_LASTSYNC = 'wo_lastsync_v1';
 const K_PLANSTAMP = 'wo_planstamp_v1'; // quando o plano ativo mudou por último (pro "mais novo vence")
 const K_DAYMAP = 'wo_daymap_v1';     // troca de treino entre dias válida só na semana corrente
-const APP_BUILD = 'v12';             // manter igual ao CACHE_VERSION do sw.js (treino-vN)
+const APP_BUILD = 'v13';             // manter igual ao CACHE_VERSION do sw.js (treino-vN)
 
 function loadStr(k){ try{return localStorage.getItem(k);}catch(e){return null;} }
 function loadObj(k){ try{const v=localStorage.getItem(k); return v?JSON.parse(v):null;}catch(e){return null;} }
@@ -2787,8 +2787,8 @@ async function fbConnect(){
 }
 
 function fbUnlink(){
-  askConfirm('Desconectar do Fitbit? O envio automático de treinos para de funcionar.', async function(){
-    try{ await fbApi('/api/fitbit/unlink'); fitbitLinked=false; render(); showToast('Fitbit desconectado'); }
+  askConfirm('Desconectar do Google Health? O envio automático de treinos para de funcionar.', async function(){
+    try{ await fbApi('/api/fitbit/unlink'); fitbitLinked=false; render(); showToast('Google Health desconectado'); }
     catch(e){ showToast(aiErrMsg(e)); }
   }, 'Desconectar');
 }
@@ -2807,44 +2807,55 @@ async function fbPullWeight(){
       bodyweight.push(entry); added++;
     });
     fitbitBusy=false;
-    if(added>0){ saveAll(); queueSync(); render(); showToast(added+' dia(s) de peso importados do Fitbit'); }
-    else { render(); showToast('Nada novo no Fitbit (30 dias)'); }
+    if(added>0){ saveAll(); queueSync(); render(); showToast(added+' dia(s) de peso importados da balança'); }
+    else { render(); showToast('Nada novo na balança (30 dias)'); }
   }catch(e){
     fitbitBusy=false; render(); showToast(aiErrMsg(e));
   }
 }
 
-// Chamado ao finalizar treino: registra a atividade no Fitbit (melhor esforço)
+// RFC3339 com o fuso local (ex: 2026-08-23T18:00:00-03:00)
+function isoLocal(d){
+  d=new Date(d);
+  const off=-d.getTimezoneOffset();
+  const sg=off>=0?'+':'-';
+  const p=function(n){ return String(Math.abs(n)).padStart(2,'0'); };
+  return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())
+    +'T'+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds())
+    +sg+p(Math.floor(Math.abs(off)/60))+':'+p(Math.abs(off)%60);
+}
+
+// Chamado ao finalizar treino: registra a sessão no Google Health (melhor esforço)
 function fbLogWorkout(sess){
   if(!fitbitLinked||!syncEnabled()) return;
-  const start=sess.startedAt?new Date(sess.startedAt):new Date(sess.completedAt);
+  const start=sess.startedAt?new Date(sess.startedAt):new Date(new Date(sess.completedAt)-45*60000);
   const end=new Date(sess.completedAt);
   const durationMin=Math.max(5,Math.round((end-start)/60000)||45);
   const w=WORKOUTS[sess.workoutId];
   fbApi('/api/fitbit/activity',{
-    date: end.getFullYear()+'-'+String(end.getMonth()+1).padStart(2,'0')+'-'+String(end.getDate()).padStart(2,'0'),
-    startTime: String(start.getHours()).padStart(2,'0')+':'+String(start.getMinutes()).padStart(2,'0'),
+    startIso: isoLocal(start),
+    endIso: isoLocal(end),
     durationMin: durationMin,
     name: 'Musculação · '+(w?w.title:sess.workoutId)
   }).then(function(j){
-    showToast('Treino enviado pro Fitbit (~'+j.calories+' kcal)');
-  }).catch(function(e){ console.warn('fitbit activity', e); });
+    showToast('Treino enviado pro Google Health (~'+j.calories+' kcal)');
+  }).catch(function(e){ console.warn('google health activity', e); });
 }
 
 function renderFitbitCard(){
   if(!aiSiteProxy) return '';
-  let html='<div class="prog" style="margin-top:0;margin-bottom:16px"><div class="prog-label">FITBIT</div>';
+  let html='<div class="prog" style="margin-top:0;margin-bottom:16px"><div class="prog-label">GOOGLE HEALTH · FITBIT</div>';
   if(!syncEnabled()){
-    html+='<div style="font-size:12px;color:var(--mute)">Requer o código de sincronização (card acima) — as rotas do Fitbit usam a mesma proteção.</div>';
+    html+='<div style="font-size:12px;color:var(--mute)">Requer o código de sincronização (card acima) — as rotas usam a mesma proteção.</div>';
   } else if(fitbitLinked===null){
     html+='<div style="font-size:12px;color:var(--mute)">Verificando conexão…</div>';
   } else if(!fitbitLinked){
-    html+='<div style="font-size:12px;color:var(--mute);margin-bottom:10px">Conecte pra puxar peso/gordura da balança pro CORPO e enviar cada treino finalizado como atividade no Fitbit. A autorização fica guardada no servidor.</div>';
-    html+='<button class="bw-add-btn" style="margin-bottom:8px;background:#00B0B9" onclick="fbConnect()">CONECTAR FITBIT</button>';
-    html+='<div style="font-size:10px;color:var(--faint)">Cadastro do app em dev.fitbit.com — Redirect URL: '+esc(location.origin+'/api/fitbit/callback')+'</div>';
+    html+='<div style="font-size:12px;color:var(--mute);margin-bottom:10px">Conecte sua conta Google/Fitbit pra puxar peso e %gordura da balança pro CORPO e enviar cada treino finalizado como sessão de musculação. A autorização fica guardada no servidor.</div>';
+    html+='<button class="bw-add-btn" style="margin-bottom:8px;background:#00B0B9" onclick="fbConnect()">CONECTAR GOOGLE HEALTH</button>';
+    html+='<div style="font-size:10px;color:var(--faint)">Cadastro no Google Cloud Console (API health.googleapis.com) — Redirect URI: '+esc(location.origin+'/api/fitbit/callback')+'</div>';
   } else {
-    html+='<div style="font-size:11px;color:var(--good);font-weight:700;margin-bottom:8px">Conectado — treinos finalizados vão sozinhos pro Fitbit.</div>';
-    html+='<button class="bw-add-btn" style="margin-bottom:8px;background:#00B0B9" onclick="fbPullWeight()">'+(fitbitBusy?'IMPORTANDO…':'PUXAR PESO DO FITBIT (30 DIAS)')+'</button>';
+    html+='<div style="font-size:11px;color:var(--good);font-weight:700;margin-bottom:8px">Conectado — treinos finalizados vão sozinhos pro Google Health.</div>';
+    html+='<button class="bw-add-btn" style="margin-bottom:8px;background:#00B0B9" onclick="fbPullWeight()">'+(fitbitBusy?'IMPORTANDO…':'PUXAR PESO DA BALANÇA (30 DIAS)')+'</button>';
     html+='<button class="reset-link" style="margin:0 auto" onclick="fbUnlink()">Desconectar</button>';
   }
   html+='</div>';
@@ -3171,7 +3182,7 @@ if(location.hash.indexOf('fitbit=')>=0){
   const ok=location.hash.indexOf('fitbit=ok')>=0;
   try{ history.replaceState(null,'',location.pathname); }catch(e){}
   active='GUIA'; render();
-  showToast(ok?'Fitbit conectado!':'Falhou a conexão com o Fitbit. Tenta de novo.');
+  showToast(ok?'Google Health conectado!':'Falhou a conexão. Tenta de novo.');
   if(ok){ fitbitLinked=true; render(); }
 }
 

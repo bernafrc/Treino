@@ -20,14 +20,20 @@ export default {
   },
 };
 
-// ---- Fitbit: OAuth + ponte de dados ----
-// Tokens do Fitbit ficam no Durable Object (servidor), nunca no aparelho.
-// Secrets necessários no worker: FITBIT_CLIENT_ID e FITBIT_CLIENT_SECRET
-// (cadastro do app pessoal em dev.fitbit.com; redirect = /api/fitbit/callback).
+// ---- Google Health (ex-Fitbit): OAuth + ponte de dados ----
+// A plataforma de desenvolvedores do Fitbit foi absorvida pelo Google:
+// cadastro no Google Cloud Console (API health.googleapis.com), OAuth do
+// Google, dados em https://health.googleapis.com/v4. Tokens ficam no
+// Durable Object (servidor), nunca no aparelho.
+// Secrets no worker: GOOGLE_CLIENT_ID e GOOGLE_CLIENT_SECRET
+// (OAuth client "Web application" com redirect = /api/fitbit/callback).
+const GH_SCOPES = 'https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly'
+  + ' https://www.googleapis.com/auth/googlehealth.activity_and_fitness.writeonly';
+
 async function handleFitbitRoute(request, env, url) {
   const path = url.pathname;
 
-  // callback é navegação do browser vindo do fitbit.com (GET, sem headers custom)
+  // callback é navegação do browser vindo do accounts.google.com (GET)
   if (path === '/api/fitbit/callback') return fitbitCallback(request, env, url);
 
   if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
@@ -38,15 +44,17 @@ async function handleFitbitRoute(request, env, url) {
   }
 
   if (path === '/api/fitbit/authurl') {
-    if (!env.FITBIT_CLIENT_ID || !env.FITBIT_CLIENT_SECRET) {
-      return jsonResp({ error: { message: 'Configure os secrets FITBIT_CLIENT_ID e FITBIT_CLIENT_SECRET no worker (cadastro em dev.fitbit.com).' } }, 500);
+    if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
+      return jsonResp({ error: { message: 'Configure os secrets GOOGLE_CLIENT_ID e GOOGLE_CLIENT_SECRET no worker (OAuth client no Google Cloud Console).' } }, 500);
     }
     const state = crypto.randomUUID();
     const redirect = url.origin + '/api/fitbit/callback';
-    const auth = 'https://www.fitbit.com/oauth2/authorize?response_type=code'
-      + '&client_id=' + encodeURIComponent(env.FITBIT_CLIENT_ID)
+    // access_type=offline + prompt=consent garantem refresh_token
+    const auth = 'https://accounts.google.com/o/oauth2/v2/auth?response_type=code'
+      + '&client_id=' + encodeURIComponent(env.GOOGLE_CLIENT_ID)
       + '&redirect_uri=' + encodeURIComponent(redirect)
-      + '&scope=' + encodeURIComponent('weight activity')
+      + '&scope=' + encodeURIComponent(GH_SCOPES)
+      + '&access_type=offline&prompt=consent'
       + '&state=' + state;
     return new Response(JSON.stringify({ url: auth }), {
       status: 200,
@@ -75,22 +83,24 @@ async function fitbitCallback(request, env, url) {
   const state = url.searchParams.get('state');
   const m = (request.headers.get('Cookie') || '').match(/fb_state=([^;]+)/);
   if (!code || !state || !m || m[1] !== state) return back('err');
-  if (!env.FITBIT_CLIENT_ID || !env.FITBIT_CLIENT_SECRET) return back('err');
+  if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) return back('err');
 
-  const basic = btoa(env.FITBIT_CLIENT_ID + ':' + env.FITBIT_CLIENT_SECRET);
-  const resp = await fetch('https://api.fitbit.com/oauth2/token', {
+  const resp = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
-    headers: { authorization: 'Basic ' + basic, 'content-type': 'application/x-www-form-urlencoded' },
-    body: 'grant_type=authorization_code&code=' + encodeURIComponent(code)
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'grant_type=authorization_code'
+      + '&code=' + encodeURIComponent(code)
+      + '&client_id=' + encodeURIComponent(env.GOOGLE_CLIENT_ID)
+      + '&client_secret=' + encodeURIComponent(env.GOOGLE_CLIENT_SECRET)
       + '&redirect_uri=' + encodeURIComponent(url.origin + '/api/fitbit/callback'),
   });
   if (!resp.ok) return back('err');
   const j = await resp.json();
+  if (!j.refresh_token) return back('err'); // sem refresh não dá pra manter a conexão
   const tok = {
     access_token: j.access_token,
     refresh_token: j.refresh_token,
-    expires_at: Date.now() + (j.expires_in || 28800) * 1000,
-    user_id: j.user_id || null,
+    expires_at: Date.now() + (j.expires_in || 3600) * 1000,
     linked_at: new Date().toISOString(),
   };
   const id = env.STORE.idFromName('main');
@@ -156,61 +166,96 @@ export class TreinoStore {
     }
 
     const at = await this.fbAccessToken();
-    if (!at) return jsonResp({ error: { message: 'Fitbit não conectado (ou a autorização expirou). Use CONECTAR FITBIT de novo.' } }, 409);
-    const h = { authorization: 'Bearer ' + at, 'accept-language': 'pt_BR' }; // pt_BR = unidades métricas
+    if (!at) return jsonResp({ error: { message: 'Google Health não conectado (ou a autorização expirou). Use CONECTAR de novo.' } }, 409);
+    const h = { authorization: 'Bearer ' + at };
+    const GH = 'https://health.googleapis.com/v4/users/me/dataTypes/';
+
+    // lista dataPoints com filtro de tempo; se o filtro der 400, refaz sem filtro
+    const listPoints = async (dataType, filterField, sinceIso) => {
+      const base = GH + dataType + '/dataPoints?pageSize=1000';
+      let r = await fetch(base + '&filter=' + encodeURIComponent(filterField + ' >= "' + sinceIso + '"'), { headers: h });
+      if (r.status === 400) r = await fetch(base, { headers: h });
+      if (!r.ok) return { error: r.status };
+      const j = await r.json();
+      return { points: j.dataPoints || [] };
+    };
+    const sampleDate = (s) => {
+      if (!s) return null;
+      const c = s.civilTime;
+      if (c && c.year) return String(c.year) + '-' + String(c.month || 1).padStart(2, '0') + '-' + String(c.day || 1).padStart(2, '0');
+      return s.physicalTime ? String(s.physicalTime).slice(0, 10) : null;
+    };
 
     if (path === '/api/fitbit/weight') {
-      const days = Math.min(31, Math.max(1, Math.round(body.days || 30)));
-      const f = (d) => d.toISOString().slice(0, 10);
-      const end = new Date(), start = new Date(Date.now() - (days - 1) * 86400000);
-      const [wr, fr] = await Promise.all([
-        fetch('https://api.fitbit.com/1/user/-/body/log/weight/date/' + f(start) + '/' + f(end) + '.json', { headers: h }),
-        fetch('https://api.fitbit.com/1/user/-/body/log/fat/date/' + f(start) + '/' + f(end) + '.json', { headers: h }),
+      const days = Math.min(90, Math.max(1, Math.round(body.days || 30)));
+      const sinceIso = new Date(Date.now() - days * 86400000).toISOString();
+      const [wres, fres] = await Promise.all([
+        listPoints('weight', 'weight.sample_time.physical_time', sinceIso),
+        listPoints('body-fat', 'body_fat.sample_time.physical_time', sinceIso),
       ]);
-      if (!wr.ok) return jsonResp({ error: { message: 'Fitbit respondeu HTTP ' + wr.status + ' no peso' } }, 502);
-      const wj = await wr.json();
-      const fj = fr.ok ? await fr.json() : { fat: [] };
+      if (wres.error) return jsonResp({ error: { message: 'Google Health respondeu HTTP ' + wres.error + ' no peso' } }, 502);
       const byDate = {};
-      (wj.weight || []).forEach((x) => { if (x.date && typeof x.weight === 'number') byDate[x.date] = { date: x.date, weight: x.weight }; });
-      (fj.fat || []).forEach((x) => { if (x.date && byDate[x.date] && typeof x.fat === 'number') byDate[x.date].bf = x.fat; });
+      wres.points.forEach((p) => {
+        const w = p.weight; if (!w || typeof w.weightGrams !== 'number') return;
+        const d = sampleDate(w.sampleTime); if (!d || d < sinceIso.slice(0, 10)) return;
+        byDate[d] = { date: d, weight: Math.round(w.weightGrams / 100) / 10 }; // g → kg com 1 casa
+      });
+      (fres.points || []).forEach((p) => {
+        const f = p.bodyFat; if (!f || typeof f.percentage !== 'number') return;
+        const d = sampleDate(f.sampleTime);
+        if (d && byDate[d]) byDate[d].bf = Math.round(f.percentage * 10) / 10;
+      });
       return jsonResp({ entries: Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date)) });
     }
 
     if (path === '/api/fitbit/activity') {
       const durationMin = Math.max(1, Math.round(body.durationMin || 45));
       const cal = Math.round(durationMin * 6); // estimativa: ~6 kcal/min de musculação
-      const params = new URLSearchParams({
-        activityName: String(body.name || 'Musculação').slice(0, 60),
-        manualCalories: String(cal),
-        startTime: String(body.startTime || '12:00'),
-        durationMillis: String(durationMin * 60000),
-        date: String(body.date || new Date().toISOString().slice(0, 10)),
+      const id = 'treino-' + Date.now(); // id próprio: minúsculas/números/hífen
+      const payload = {
+        exercise: {
+          interval: {
+            startTime: String(body.startIso || new Date(Date.now() - durationMin * 60000).toISOString()),
+            endTime: String(body.endIso || new Date().toISOString()),
+          },
+          exerciseType: 'STRENGTH_TRAINING',
+          displayName: String(body.name || 'Musculação').slice(0, 60),
+          activeDuration: (durationMin * 60) + 's',
+          metricsSummary: { caloriesKcal: cal },
+        },
+      };
+      const ar = await fetch(GH + 'exercise/dataPoints/' + id, {
+        method: 'PATCH',
+        headers: { ...h, 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
       });
-      const ar = await fetch('https://api.fitbit.com/1/user/-/activities.json', {
-        method: 'POST',
-        headers: { ...h, 'content-type': 'application/x-www-form-urlencoded' },
-        body: params.toString(),
-      });
-      if (!ar.ok) return jsonResp({ error: { message: 'Fitbit respondeu HTTP ' + ar.status + ' na atividade' } }, 502);
+      if (!ar.ok) {
+        let msg = 'Google Health respondeu HTTP ' + ar.status + ' na atividade';
+        try { const ej = await ar.json(); if (ej.error && ej.error.message) msg += ': ' + String(ej.error.message).slice(0, 200); } catch (e) {}
+        return jsonResp({ error: { message: msg } }, 502);
+      }
       return jsonResp({ ok: true, calories: cal });
     }
 
-    return jsonResp({ error: { message: 'rota fitbit desconhecida' } }, 404);
+    return jsonResp({ error: { message: 'rota desconhecida' } }, 404);
   }
 
-  // Access token válido, renovando se preciso. Refresh token do Fitbit é de uso
-  // único — o DO é single-thread, então não há corrida ao renovar aqui dentro.
+  // Access token válido, renovando no Google se preciso. O DO é single-thread,
+  // então não há corrida ao renovar. O Google mantém o mesmo refresh_token
+  // (só substitui se mandar um novo).
   async fbAccessToken() {
     const st = this.storage;
     let t = await st.get('fitbit');
     if (!t) return null;
     if (Date.now() < (t.expires_at || 0) - 60000) return t.access_token;
-    if (!this.env.FITBIT_CLIENT_ID || !this.env.FITBIT_CLIENT_SECRET) return null;
-    const basic = btoa(this.env.FITBIT_CLIENT_ID + ':' + this.env.FITBIT_CLIENT_SECRET);
-    const resp = await fetch('https://api.fitbit.com/oauth2/token', {
+    if (!this.env.GOOGLE_CLIENT_ID || !this.env.GOOGLE_CLIENT_SECRET) return null;
+    const resp = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
-      headers: { authorization: 'Basic ' + basic, 'content-type': 'application/x-www-form-urlencoded' },
-      body: 'grant_type=refresh_token&refresh_token=' + encodeURIComponent(t.refresh_token),
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'grant_type=refresh_token'
+        + '&refresh_token=' + encodeURIComponent(t.refresh_token)
+        + '&client_id=' + encodeURIComponent(this.env.GOOGLE_CLIENT_ID)
+        + '&client_secret=' + encodeURIComponent(this.env.GOOGLE_CLIENT_SECRET),
     });
     if (!resp.ok) {
       if (resp.status === 400 || resp.status === 401) await st.delete('fitbit'); // autorização morreu: reconectar
@@ -219,9 +264,8 @@ export class TreinoStore {
     const j = await resp.json();
     t = {
       access_token: j.access_token,
-      refresh_token: j.refresh_token,
-      expires_at: Date.now() + (j.expires_in || 28800) * 1000,
-      user_id: j.user_id || t.user_id,
+      refresh_token: j.refresh_token || t.refresh_token,
+      expires_at: Date.now() + (j.expires_in || 3600) * 1000,
       linked_at: t.linked_at,
     };
     await st.put('fitbit', t);
