@@ -14,10 +14,93 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === '/api/messages') return proxyAnthropic(request, env);
     if (url.pathname === '/api/sync') return handleSync(request, env);
+    if (url.pathname.startsWith('/api/fitbit/')) return handleFitbitRoute(request, env, url);
     if (env.ASSETS) return env.ASSETS.fetch(request);
     return new Response('not found', { status: 404 });
   },
 };
+
+// ---- Fitbit: OAuth + ponte de dados ----
+// Tokens do Fitbit ficam no Durable Object (servidor), nunca no aparelho.
+// Secrets necessários no worker: FITBIT_CLIENT_ID e FITBIT_CLIENT_SECRET
+// (cadastro do app pessoal em dev.fitbit.com; redirect = /api/fitbit/callback).
+async function handleFitbitRoute(request, env, url) {
+  const path = url.pathname;
+
+  // callback é navegação do browser vindo do fitbit.com (GET, sem headers custom)
+  if (path === '/api/fitbit/callback') return fitbitCallback(request, env, url);
+
+  if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
+  const origin = request.headers.get('Origin');
+  if (origin && origin !== url.origin) return new Response('origin not allowed', { status: 403 });
+  if (!env.SYNC_TOKEN || (request.headers.get('x-sync-token') || '') !== env.SYNC_TOKEN) {
+    return new Response('unauthorized', { status: 401 });
+  }
+
+  if (path === '/api/fitbit/authurl') {
+    if (!env.FITBIT_CLIENT_ID || !env.FITBIT_CLIENT_SECRET) {
+      return jsonResp({ error: { message: 'Configure os secrets FITBIT_CLIENT_ID e FITBIT_CLIENT_SECRET no worker (cadastro em dev.fitbit.com).' } }, 500);
+    }
+    const state = crypto.randomUUID();
+    const redirect = url.origin + '/api/fitbit/callback';
+    const auth = 'https://www.fitbit.com/oauth2/authorize?response_type=code'
+      + '&client_id=' + encodeURIComponent(env.FITBIT_CLIENT_ID)
+      + '&redirect_uri=' + encodeURIComponent(redirect)
+      + '&scope=' + encodeURIComponent('weight activity')
+      + '&state=' + state;
+    return new Response(JSON.stringify({ url: auth }), {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+        // cookie de state: só quem passou pelo authurl (com o código de sync) valida o callback
+        'set-cookie': 'fb_state=' + state + '; Max-Age=600; Path=/api/fitbit; HttpOnly; Secure; SameSite=Lax',
+      },
+    });
+  }
+
+  // demais rotas (status/weight/activity/unlink) vivem no Durable Object
+  const id = env.STORE.idFromName('main');
+  return env.STORE.get(id).fetch(request);
+}
+
+async function fitbitCallback(request, env, url) {
+  const back = (flag) => new Response(null, {
+    status: 302,
+    headers: {
+      location: url.origin + '/#fitbit=' + flag,
+      'set-cookie': 'fb_state=; Max-Age=0; Path=/api/fitbit; HttpOnly; Secure; SameSite=Lax',
+    },
+  });
+  const code = url.searchParams.get('code');
+  const state = url.searchParams.get('state');
+  const m = (request.headers.get('Cookie') || '').match(/fb_state=([^;]+)/);
+  if (!code || !state || !m || m[1] !== state) return back('err');
+  if (!env.FITBIT_CLIENT_ID || !env.FITBIT_CLIENT_SECRET) return back('err');
+
+  const basic = btoa(env.FITBIT_CLIENT_ID + ':' + env.FITBIT_CLIENT_SECRET);
+  const resp = await fetch('https://api.fitbit.com/oauth2/token', {
+    method: 'POST',
+    headers: { authorization: 'Basic ' + basic, 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'grant_type=authorization_code&code=' + encodeURIComponent(code)
+      + '&redirect_uri=' + encodeURIComponent(url.origin + '/api/fitbit/callback'),
+  });
+  if (!resp.ok) return back('err');
+  const j = await resp.json();
+  const tok = {
+    access_token: j.access_token,
+    refresh_token: j.refresh_token,
+    expires_at: Date.now() + (j.expires_in || 28800) * 1000,
+    user_id: j.user_id || null,
+    linked_at: new Date().toISOString(),
+  };
+  const id = env.STORE.idFromName('main');
+  await env.STORE.get(id).fetch(new Request(url.origin + '/api/fitbit/save', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(tok),
+  }));
+  return back('ok');
+}
 
 // ---- Sincronização: histórico único e permanente ----
 // Os dados moram num Durable Object (SQLite) — instância única "main".
@@ -51,9 +134,101 @@ function jsonResp(obj, status) {
 // - deleções: lápides (tombstones) por id, pra apagado não ressuscitar;
 // - plano e análise: timestamp mais novo vence (planStamp / generatedAt).
 export class TreinoStore {
-  constructor(state) { this.storage = state.storage; }
+  constructor(state, env) { this.storage = state.storage; this.env = env || {}; }
 
   async fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (path.startsWith('/api/fitbit/')) return this.fitbit(request, path);
+    return this.handleSync(request);
+  }
+
+  // ---- Fitbit (tokens e chamadas ficam todos no servidor) ----
+  async fitbit(request, path) {
+    let body = {};
+    try { body = await request.json(); } catch (e) {}
+    const st = this.storage;
+
+    if (path === '/api/fitbit/save') { await st.put('fitbit', body); return jsonResp({ ok: true }); }
+    if (path === '/api/fitbit/unlink') { await st.delete('fitbit'); return jsonResp({ ok: true }); }
+    if (path === '/api/fitbit/status') {
+      const t = await st.get('fitbit');
+      return jsonResp({ linked: !!t, since: t ? t.linked_at : null });
+    }
+
+    const at = await this.fbAccessToken();
+    if (!at) return jsonResp({ error: { message: 'Fitbit não conectado (ou a autorização expirou). Use CONECTAR FITBIT de novo.' } }, 409);
+    const h = { authorization: 'Bearer ' + at, 'accept-language': 'pt_BR' }; // pt_BR = unidades métricas
+
+    if (path === '/api/fitbit/weight') {
+      const days = Math.min(31, Math.max(1, Math.round(body.days || 30)));
+      const f = (d) => d.toISOString().slice(0, 10);
+      const end = new Date(), start = new Date(Date.now() - (days - 1) * 86400000);
+      const [wr, fr] = await Promise.all([
+        fetch('https://api.fitbit.com/1/user/-/body/log/weight/date/' + f(start) + '/' + f(end) + '.json', { headers: h }),
+        fetch('https://api.fitbit.com/1/user/-/body/log/fat/date/' + f(start) + '/' + f(end) + '.json', { headers: h }),
+      ]);
+      if (!wr.ok) return jsonResp({ error: { message: 'Fitbit respondeu HTTP ' + wr.status + ' no peso' } }, 502);
+      const wj = await wr.json();
+      const fj = fr.ok ? await fr.json() : { fat: [] };
+      const byDate = {};
+      (wj.weight || []).forEach((x) => { if (x.date && typeof x.weight === 'number') byDate[x.date] = { date: x.date, weight: x.weight }; });
+      (fj.fat || []).forEach((x) => { if (x.date && byDate[x.date] && typeof x.fat === 'number') byDate[x.date].bf = x.fat; });
+      return jsonResp({ entries: Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date)) });
+    }
+
+    if (path === '/api/fitbit/activity') {
+      const durationMin = Math.max(1, Math.round(body.durationMin || 45));
+      const cal = Math.round(durationMin * 6); // estimativa: ~6 kcal/min de musculação
+      const params = new URLSearchParams({
+        activityName: String(body.name || 'Musculação').slice(0, 60),
+        manualCalories: String(cal),
+        startTime: String(body.startTime || '12:00'),
+        durationMillis: String(durationMin * 60000),
+        date: String(body.date || new Date().toISOString().slice(0, 10)),
+      });
+      const ar = await fetch('https://api.fitbit.com/1/user/-/activities.json', {
+        method: 'POST',
+        headers: { ...h, 'content-type': 'application/x-www-form-urlencoded' },
+        body: params.toString(),
+      });
+      if (!ar.ok) return jsonResp({ error: { message: 'Fitbit respondeu HTTP ' + ar.status + ' na atividade' } }, 502);
+      return jsonResp({ ok: true, calories: cal });
+    }
+
+    return jsonResp({ error: { message: 'rota fitbit desconhecida' } }, 404);
+  }
+
+  // Access token válido, renovando se preciso. Refresh token do Fitbit é de uso
+  // único — o DO é single-thread, então não há corrida ao renovar aqui dentro.
+  async fbAccessToken() {
+    const st = this.storage;
+    let t = await st.get('fitbit');
+    if (!t) return null;
+    if (Date.now() < (t.expires_at || 0) - 60000) return t.access_token;
+    if (!this.env.FITBIT_CLIENT_ID || !this.env.FITBIT_CLIENT_SECRET) return null;
+    const basic = btoa(this.env.FITBIT_CLIENT_ID + ':' + this.env.FITBIT_CLIENT_SECRET);
+    const resp = await fetch('https://api.fitbit.com/oauth2/token', {
+      method: 'POST',
+      headers: { authorization: 'Basic ' + basic, 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'grant_type=refresh_token&refresh_token=' + encodeURIComponent(t.refresh_token),
+    });
+    if (!resp.ok) {
+      if (resp.status === 400 || resp.status === 401) await st.delete('fitbit'); // autorização morreu: reconectar
+      return null;
+    }
+    const j = await resp.json();
+    t = {
+      access_token: j.access_token,
+      refresh_token: j.refresh_token,
+      expires_at: Date.now() + (j.expires_in || 28800) * 1000,
+      user_id: j.user_id || t.user_id,
+      linked_at: t.linked_at,
+    };
+    await st.put('fitbit', t);
+    return t.access_token;
+  }
+
+  async handleSync(request) {
     let body;
     try { body = await request.json(); } catch (e) { return jsonResp({ error: { message: 'json inválido' } }, 400); }
     body = body || {};

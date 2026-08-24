@@ -132,6 +132,16 @@ quarta (`PLAN_DAYS` com QUA opcional em `validatePlanShape`/`normalizePlan`/sche
   estagnação, desequilíbrios de volume, consistência, dores citadas nas notas. Resultado em
   veredito/progressos/problemas/recomendações, salvo em `wo_analysis_v1` (reabre sem gastar).
   A próxima geração de plano lê a última análise automaticamente.
+- **Fitbit (aba GUIA)**: OAuth guardado no servidor (Durable Object) — nenhum token no
+  aparelho. Rotas do worker: `/api/fitbit/authurl` (com cookie de state), `/callback`
+  (troca o code e salva), `/status`, `/weight` (peso+%gordura dos últimos ≤31 dias, unidades
+  métricas via `Accept-Language: pt_BR`), `/activity` (registra musculação com
+  `activityName`+`manualCalories`≈6kcal/min), `/unlink`. Todas menos o callback exigem o
+  `x-sync-token`. Refresh token do Fitbit é de uso único — renovação acontece dentro do DO
+  (single-thread, sem corrida). Secrets: `FITBIT_CLIENT_ID`/`FITBIT_CLIENT_SECRET`
+  (app pessoal em dev.fitbit.com, redirect `<origem>/api/fitbit/callback`). No app: puxar
+  peso pro CORPO (dias já registrados localmente vencem) e envio automático do treino
+  finalizado como atividade.
 - **Histórico na nuvem (aba GUIA)**: treinos, medidas, plano e análise sincronizados entre
   aparelhos via `POST /api/sync` no worker (Durable Object SQLite, instância única "main").
   Autenticação por código: secret `SYNC_TOKEN` no worker + o mesmo código colado em cada

@@ -869,7 +869,7 @@ const K_TOMBS = 'wo_tombs_v1';       // ids apagados localmente, pendentes de su
 const K_LASTSYNC = 'wo_lastsync_v1';
 const K_PLANSTAMP = 'wo_planstamp_v1'; // quando o plano ativo mudou por último (pro "mais novo vence")
 const K_DAYMAP = 'wo_daymap_v1';     // troca de treino entre dias válida só na semana corrente
-const APP_BUILD = 'v11';             // manter igual ao CACHE_VERSION do sw.js (treino-vN)
+const APP_BUILD = 'v12';             // manter igual ao CACHE_VERSION do sw.js (treino-vN)
 
 function loadStr(k){ try{return localStorage.getItem(k);}catch(e){return null;} }
 function loadObj(k){ try{const v=localStorage.getItem(k); return v?JSON.parse(v):null;}catch(e){return null;} }
@@ -1871,6 +1871,7 @@ function finalizeWorkout(wId){
   active='HIST'; saveAll(); render();
   queueSync();
   openWorkoutSummary(sess);
+  fbLogWorkout(sess);
 }
 
 // ============ RESUMO PÓS-TREINO (copiar p/ Google Health etc) ============
@@ -2067,6 +2068,7 @@ let aiSiteProxy=false;
       aiSiteProxy=true;
       if(active==='GUIA') render();
       syncNow(); // primeira sincronização do boot, se o código estiver configurado
+      fbStatus();
     }
   }).catch(function(){});
 })();
@@ -2750,6 +2752,105 @@ function renderSyncCard(){
   return html;
 }
 
+// ============ FITBIT ============
+// Toda a credencial (OAuth) mora no servidor; o app só chama as rotas do
+// worker autenticado pelo mesmo código de sincronização.
+let fitbitLinked=null; // null = ainda não verificado
+let fitbitBusy=false;
+
+async function fbApi(path, payload){
+  const resp=await fetch(path,{
+    method:'POST',
+    headers:{ 'content-type':'application/json', 'x-sync-token':(loadStr(K_SYNCTOKEN)||'').trim() },
+    body:JSON.stringify(payload||{})
+  });
+  let j={}; try{ j=await resp.json(); }catch(e){}
+  if(!resp.ok){ const err=new Error((j.error&&j.error.message)||('HTTP '+resp.status)); err.status=resp.status; throw err; }
+  return j;
+}
+
+async function fbStatus(){
+  if(!syncEnabled()) return;
+  try{
+    const j=await fbApi('/api/fitbit/status');
+    fitbitLinked=!!j.linked;
+  }catch(e){ fitbitLinked=null; }
+  if(active==='GUIA') render();
+}
+
+async function fbConnect(){
+  if(!syncEnabled()){ showToast('Configura o código de sincronização primeiro'); return; }
+  try{
+    const j=await fbApi('/api/fitbit/authurl');
+    if(j.url) location.href=j.url; // vai pro fitbit.com autorizar e volta com #fitbit=ok
+  }catch(e){ showToast(aiErrMsg(e)); }
+}
+
+function fbUnlink(){
+  askConfirm('Desconectar do Fitbit? O envio automático de treinos para de funcionar.', async function(){
+    try{ await fbApi('/api/fitbit/unlink'); fitbitLinked=false; render(); showToast('Fitbit desconectado'); }
+    catch(e){ showToast(aiErrMsg(e)); }
+  }, 'Desconectar');
+}
+
+async function fbPullWeight(){
+  if(fitbitBusy) return;
+  fitbitBusy=true; render();
+  try{
+    const j=await fbApi('/api/fitbit/weight',{days:30});
+    let added=0;
+    (j.entries||[]).forEach(function(e){
+      if(!e.date||typeof e.weight!=='number') return;
+      if(bodyweight.some(function(b){ return String(b.date).slice(0,10)===e.date; })) return; // dia já registrado vence
+      const entry={ id:'bwfit_'+e.date, date:e.date+'T12:00:00.000Z', weight:Math.round(e.weight*10)/10 };
+      if(typeof e.bf==='number'&&e.bf>0) entry.bf=Math.round(e.bf*10)/10;
+      bodyweight.push(entry); added++;
+    });
+    fitbitBusy=false;
+    if(added>0){ saveAll(); queueSync(); render(); showToast(added+' dia(s) de peso importados do Fitbit'); }
+    else { render(); showToast('Nada novo no Fitbit (30 dias)'); }
+  }catch(e){
+    fitbitBusy=false; render(); showToast(aiErrMsg(e));
+  }
+}
+
+// Chamado ao finalizar treino: registra a atividade no Fitbit (melhor esforço)
+function fbLogWorkout(sess){
+  if(!fitbitLinked||!syncEnabled()) return;
+  const start=sess.startedAt?new Date(sess.startedAt):new Date(sess.completedAt);
+  const end=new Date(sess.completedAt);
+  const durationMin=Math.max(5,Math.round((end-start)/60000)||45);
+  const w=WORKOUTS[sess.workoutId];
+  fbApi('/api/fitbit/activity',{
+    date: end.getFullYear()+'-'+String(end.getMonth()+1).padStart(2,'0')+'-'+String(end.getDate()).padStart(2,'0'),
+    startTime: String(start.getHours()).padStart(2,'0')+':'+String(start.getMinutes()).padStart(2,'0'),
+    durationMin: durationMin,
+    name: 'Musculação · '+(w?w.title:sess.workoutId)
+  }).then(function(j){
+    showToast('Treino enviado pro Fitbit (~'+j.calories+' kcal)');
+  }).catch(function(e){ console.warn('fitbit activity', e); });
+}
+
+function renderFitbitCard(){
+  if(!aiSiteProxy) return '';
+  let html='<div class="prog" style="margin-top:0;margin-bottom:16px"><div class="prog-label">FITBIT</div>';
+  if(!syncEnabled()){
+    html+='<div style="font-size:12px;color:var(--mute)">Requer o código de sincronização (card acima) — as rotas do Fitbit usam a mesma proteção.</div>';
+  } else if(fitbitLinked===null){
+    html+='<div style="font-size:12px;color:var(--mute)">Verificando conexão…</div>';
+  } else if(!fitbitLinked){
+    html+='<div style="font-size:12px;color:var(--mute);margin-bottom:10px">Conecte pra puxar peso/gordura da balança pro CORPO e enviar cada treino finalizado como atividade no Fitbit. A autorização fica guardada no servidor.</div>';
+    html+='<button class="bw-add-btn" style="margin-bottom:8px;background:#00B0B9" onclick="fbConnect()">CONECTAR FITBIT</button>';
+    html+='<div style="font-size:10px;color:var(--faint)">Cadastro do app em dev.fitbit.com — Redirect URL: '+esc(location.origin+'/api/fitbit/callback')+'</div>';
+  } else {
+    html+='<div style="font-size:11px;color:var(--good);font-weight:700;margin-bottom:8px">Conectado — treinos finalizados vão sozinhos pro Fitbit.</div>';
+    html+='<button class="bw-add-btn" style="margin-bottom:8px;background:#00B0B9" onclick="fbPullWeight()">'+(fitbitBusy?'IMPORTANDO…':'PUXAR PESO DO FITBIT (30 DIAS)')+'</button>';
+    html+='<button class="reset-link" style="margin:0 auto" onclick="fbUnlink()">Desconectar</button>';
+  }
+  html+='</div>';
+  return html;
+}
+
 function renderAiCard(){
   const custom=validatePlanShape(loadObj(K_PLAN));
   const meta=loadObj(K_PLAN_META);
@@ -2827,6 +2928,7 @@ function renderGuide(){
   let html='<div class="section-head"><div class="eyebrow">DIRETRIZES</div><div class="display">GUIA RÁPIDO</div></div>';
   html+=renderAiCard();
   html+=renderSyncCard();
+  html+=renderFitbitCard();
   // atualização manual: PWA instalado no iOS não tem "puxar pra recarregar"
   html+='<div class="guide-card" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:16px">'
     +'<div><div class="guide-label">APP</div><div class="guide-value" style="font-size:12px;color:var(--mute)">versão '+APP_BUILD+' · atualiza sozinho ao abrir; use o botão se quiser forçar</div></div>'
@@ -3063,6 +3165,15 @@ function showToast(msg){
 }
 
 render();
+
+// Volta do OAuth do Fitbit (worker redireciona com #fitbit=ok|err)
+if(location.hash.indexOf('fitbit=')>=0){
+  const ok=location.hash.indexOf('fitbit=ok')>=0;
+  try{ history.replaceState(null,'',location.pathname); }catch(e){}
+  active='GUIA'; render();
+  showToast(ok?'Fitbit conectado!':'Falhou a conexão com o Fitbit. Tenta de novo.');
+  if(ok){ fitbitLinked=true; render(); }
+}
 
 // Offline support. No-op when the file is opened locally (file://).
 if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
