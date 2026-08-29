@@ -869,7 +869,7 @@ const K_TOMBS = 'wo_tombs_v1';       // ids apagados localmente, pendentes de su
 const K_LASTSYNC = 'wo_lastsync_v1';
 const K_PLANSTAMP = 'wo_planstamp_v1'; // quando o plano ativo mudou por último (pro "mais novo vence")
 const K_DAYMAP = 'wo_daymap_v1';     // troca de treino entre dias válida só na semana corrente
-const APP_BUILD = 'v13';             // manter igual ao CACHE_VERSION do sw.js (treino-vN)
+const APP_BUILD = 'v14';             // manter igual ao CACHE_VERSION do sw.js (treino-vN)
 
 function loadStr(k){ try{return localStorage.getItem(k);}catch(e){return null;} }
 function loadObj(k){ try{const v=localStorage.getItem(k); return v?JSON.parse(v):null;}catch(e){return null;} }
@@ -2076,7 +2076,8 @@ let aiSiteProxy=false;
 function aiProxy(){
   const p=(loadStr(K_PROXY)||'').trim();
   if(/^https:\/\//.test(p)) return p;        // proxy manual (Worker avulso) vence
-  if(aiSiteProxy) return '/api/messages';    // function do próprio site
+  // proxy do próprio site: multiusuário, exige código de acesso pra gastar a chave
+  if(aiSiteProxy && (loadStr(K_SYNCTOKEN)||'').trim()) return '/api/messages';
   return '';
 }
 function aiHasCreds(){ return !!(aiProxy() || (loadStr(K_APIKEY)||'').trim()); }
@@ -2251,6 +2252,8 @@ async function aiRequest(key, useFallbacks, sys, usr, schema){
       headers['anthropic-version']='2023-06-01';
       // habilita CORS para chamada direta do navegador (app pessoal, chave do próprio usuário)
       headers['anthropic-dangerous-direct-browser-access']='true';
+    } else if(proxy==='/api/messages'){
+      headers['x-sync-token']=(loadStr(K_SYNCTOKEN)||'').trim(); // identifica o usuário no proxy do site
     }
     if(useFallbacks){
       // se um classificador recusar, a API re-roda no modelo de fallback na mesma chamada
@@ -2699,7 +2702,7 @@ async function syncNow(){
     });
     if(!resp.ok){
       let m='sync falhou (HTTP '+resp.status+')';
-      if(resp.status===401) m='código de sincronização não bate com o SYNC_TOKEN do worker';
+      if(resp.status===401) m='código de acesso não aceito pelo servidor';
       try{ const j=await resp.json(); if(j.error&&j.error.message) m=j.error.message; }catch(e){}
       throw new Error(m);
     }
@@ -2743,8 +2746,8 @@ function renderSyncCard(){
   if(!aiSiteProxy){
     html+='<div style="font-size:12px;color:var(--mute)">Disponível quando o app roda no site do Cloudflare (o mesmo que guarda a chave da IA). Aqui neste endereço, os dados ficam só no aparelho — use BACKUP/IMPORTAR pra mover.</div>';
   } else {
-    html+='<div style="font-size:12px;color:var(--mute);margin-bottom:10px">Treinos, medidas, plano e análise guardados na nuvem e sincronizados entre os aparelhos. Invente um código, salve como secret <b>SYNC_TOKEN</b> no worker e cole o mesmo código em cada aparelho.</div>';
-    html+='<input class="ai-input" type="password" autocomplete="off" placeholder="Código de sincronização (o mesmo do SYNC_TOKEN)" value="'+esc(token)+'" oninput="syncSaveToken(this.value)">';
+    html+='<div style="font-size:12px;color:var(--mute);margin-bottom:10px">Seu <b>código de acesso</b> destrava tudo: nuvem, motor IA e Fitbit. Cada pessoa tem o seu, com histórico separado (o dono cadastra os códigos no worker: <b>SYNC_TOKEN</b> pro principal, <b>USER_CODES</b> pros convidados). Cole o mesmo código em cada aparelho seu.</div>';
+    html+='<input class="ai-input" type="password" autocomplete="off" placeholder="Código de acesso" value="'+esc(token)+'" oninput="syncSaveToken(this.value)">';
     html+='<button class="bw-add-btn" style="margin-bottom:8px;background:var(--grav)" onclick="syncNow()">SINCRONIZAR AGORA</button>';
     html+='<div class="ai-status sync-status-live" style="color:var(--grav)">'+esc(syncStatusText())+'</div>';
   }
@@ -2779,7 +2782,7 @@ async function fbStatus(){
 }
 
 async function fbConnect(){
-  if(!syncEnabled()){ showToast('Configura o código de sincronização primeiro'); return; }
+  if(!syncEnabled()){ showToast('Configura o código de acesso primeiro'); return; }
   try{
     const j=await fbApi('/api/fitbit/authurl');
     if(j.url) location.href=j.url; // vai pro fitbit.com autorizar e volta com #fitbit=ok
@@ -2846,7 +2849,7 @@ function renderFitbitCard(){
   if(!aiSiteProxy) return '';
   let html='<div class="prog" style="margin-top:0;margin-bottom:16px"><div class="prog-label">GOOGLE HEALTH · FITBIT</div>';
   if(!syncEnabled()){
-    html+='<div style="font-size:12px;color:var(--mute)">Requer o código de sincronização (card acima) — as rotas usam a mesma proteção.</div>';
+    html+='<div style="font-size:12px;color:var(--mute)">Requer o código de acesso (card acima) — as rotas usam a mesma proteção.</div>';
   } else if(fitbitLinked===null){
     html+='<div style="font-size:12px;color:var(--mute)">Verificando conexão…</div>';
   } else if(!fitbitLinked){
@@ -2873,10 +2876,12 @@ function renderAiCard(){
   html+='<div style="font-size:12px;color:var(--mute);margin-bottom:10px">Gera um plano novo com base no seu histórico, medidas e notas — ou importa um treino colado. '
     +(custom?('<b style="color:var(--accent)">Plano IA ativo</b>'+(meta&&meta.generatedAt?' desde '+fmtDate(meta.generatedAt):'')+'.'):'Plano original ativo.')
     +'</div>';
-  if(aiSiteProxy && !proxy){
-    // hospedado no Cloudflare Pages: o proxy é do próprio site, zero configuração
+  if(aiSiteProxy && !proxy && (loadStr(K_SYNCTOKEN)||'').trim()){
+    // hospedado no worker + código de acesso: o proxy é do próprio site, zero configuração
     html+='<div style="font-size:11px;color:var(--good);font-weight:700;margin:0 0 8px">Proxy do site ativo — a chave mora no servidor. Nada pra configurar aqui.</div>';
     if(key) html+='<button class="reset-link" style="margin:0 auto 8px" onclick="aiWipeKey()">Apagar a chave que ainda está salva neste aparelho</button>';
+  } else if(aiSiteProxy && !proxy){
+    html+='<div style="font-size:11px;color:var(--accent);font-weight:700;margin:0 0 8px">Cola seu código de acesso no card HISTÓRICO NA NUVEM pra liberar a IA deste site.</div>';
   } else {
     html+='<input class="ai-input" type="url" autocomplete="off" placeholder="URL do proxy (recomendado): https://…workers.dev" value="'+esc(proxy)+'" oninput="aiSaveProxy(this.value)">';
     if(hasProxy){
@@ -2897,7 +2902,7 @@ function renderAiCard(){
   if(custom&&!aiBusy) html+='<button class="reset-link" style="margin:8px auto 0" onclick="restoreDefaultPlan()">Voltar ao plano original</button>';
   if(custom&&meta&&meta.resumo) html+='<div class="session-note" style="margin-top:10px">'+esc(meta.resumo)+'</div>';
   html+='<div style="font-size:10px;color:var(--faint);margin-top:10px">'
-    +((aiSiteProxy&&!proxy)?'As chamadas passam pelo servidor do próprio site; a chave mora lá como secret (equivalente do .env).'
+    +((aiSiteProxy&&!proxy&&(loadStr(K_SYNCTOKEN)||'').trim())?'As chamadas passam pelo servidor do próprio site; a chave mora lá como secret (equivalente do .env).'
       :(hasProxy?'As chamadas passam pelo seu proxy; a chave mora lá como secret (equivalente do .env).'
       :'Sem proxy, a chave fica neste aparelho e vai direto pra API da Anthropic. Pra tirar a chave do aparelho, configura o proxy (instruções no README).'))
     +' Cada geração custa em torno de US$ 0,30–0,50 (Claude Opus).</div>';

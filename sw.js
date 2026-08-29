@@ -1,6 +1,6 @@
 // Service worker: cache-first for the shell so the app opens offline.
 // Bump CACHE_VERSION whenever index.html changes so users get the new build.
-const CACHE_VERSION = 'treino-v13';
+const CACHE_VERSION = 'treino-v14';
 const ASSETS = [
   './',
   './index.html',

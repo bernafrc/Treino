@@ -39,9 +39,8 @@ async function handleFitbitRoute(request, env, url) {
   if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
   const origin = request.headers.get('Origin');
   if (origin && origin !== url.origin) return new Response('origin not allowed', { status: 403 });
-  if (!env.SYNC_TOKEN || (request.headers.get('x-sync-token') || '') !== env.SYNC_TOKEN) {
-    return new Response('unauthorized', { status: 401 });
-  }
+  const code = authCode(request, env);
+  if (!code) return new Response('unauthorized', { status: 401 });
 
   if (path === '/api/fitbit/authurl') {
     if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
@@ -56,33 +55,33 @@ async function handleFitbitRoute(request, env, url) {
       + '&scope=' + encodeURIComponent(GH_SCOPES)
       + '&access_type=offline&prompt=consent'
       + '&state=' + state;
-    return new Response(JSON.stringify({ url: auth }), {
-      status: 200,
-      headers: {
-        'content-type': 'application/json',
-        // cookie de state: só quem passou pelo authurl (com o código de sync) valida o callback
-        'set-cookie': 'fb_state=' + state + '; Max-Age=600; Path=/api/fitbit; HttpOnly; Secure; SameSite=Lax',
-      },
-    });
+    // cookies de state + usuário: o callback (GET do Google, sem headers custom)
+    // usa os dois pra validar e saber em qual cofre guardar o token
+    const headers = new Headers({ 'content-type': 'application/json' });
+    headers.append('set-cookie', 'fb_state=' + state + '; Max-Age=600; Path=/api/fitbit; HttpOnly; Secure; SameSite=Lax');
+    headers.append('set-cookie', 'fb_user=' + encodeURIComponent(code) + '; Max-Age=600; Path=/api/fitbit; HttpOnly; Secure; SameSite=Lax');
+    return new Response(JSON.stringify({ url: auth }), { status: 200, headers });
   }
 
-  // demais rotas (status/weight/activity/unlink) vivem no Durable Object
-  const id = env.STORE.idFromName('main');
-  return env.STORE.get(id).fetch(request);
+  // demais rotas (status/weight/activity/unlink) vivem no cofre do usuário
+  return userStore(env, code).fetch(request);
 }
 
 async function fitbitCallback(request, env, url) {
-  const back = (flag) => new Response(null, {
-    status: 302,
-    headers: {
-      location: url.origin + '/#fitbit=' + flag,
-      'set-cookie': 'fb_state=; Max-Age=0; Path=/api/fitbit; HttpOnly; Secure; SameSite=Lax',
-    },
-  });
+  const back = (flag) => {
+    const headers = new Headers({ location: url.origin + '/#fitbit=' + flag });
+    headers.append('set-cookie', 'fb_state=; Max-Age=0; Path=/api/fitbit; HttpOnly; Secure; SameSite=Lax');
+    headers.append('set-cookie', 'fb_user=; Max-Age=0; Path=/api/fitbit; HttpOnly; Secure; SameSite=Lax');
+    return new Response(null, { status: 302, headers });
+  };
   const code = url.searchParams.get('code');
   const state = url.searchParams.get('state');
-  const m = (request.headers.get('Cookie') || '').match(/fb_state=([^;]+)/);
+  const cookies = request.headers.get('Cookie') || '';
+  const m = cookies.match(/fb_state=([^;]+)/);
+  const mu = cookies.match(/fb_user=([^;]+)/);
+  const userCode = mu ? decodeURIComponent(mu[1]) : '';
   if (!code || !state || !m || m[1] !== state) return back('err');
+  if (!validCode(env, userCode)) return back('err');
   if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) return back('err');
 
   const resp = await fetch('https://oauth2.googleapis.com/token', {
@@ -103,8 +102,7 @@ async function fitbitCallback(request, env, url) {
     expires_at: Date.now() + (j.expires_in || 3600) * 1000,
     linked_at: new Date().toISOString(),
   };
-  const id = env.STORE.idFromName('main');
-  await env.STORE.get(id).fetch(new Request(url.origin + '/api/fitbit/save', {
+  await userStore(env, userCode).fetch(new Request(url.origin + '/api/fitbit/save', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(tok),
@@ -112,10 +110,29 @@ async function fitbitCallback(request, env, url) {
   return back('ok');
 }
 
-// ---- Sincronização: histórico único e permanente ----
-// Os dados moram num Durable Object (SQLite) — instância única "main".
-// Autenticação: secret SYNC_TOKEN no worker; o app manda o mesmo valor no
-// header x-sync-token. Sem o código, ninguém lê nem escreve.
+// ---- Multiusuário por código de acesso ----
+// Cada código é um usuário com cofre próprio (Durable Object separado).
+// Quem define os códigos é o dono, via secrets do worker:
+//   SYNC_TOKEN  — código legado do Bernardo; mapeia pro DO original 'main'.
+//   USER_CODES  — códigos convidados, separados por vírgula (ex: "ana-123,ze-456").
+// O código autentica sync, proxy da IA e Fitbit (header x-sync-token).
+export function validCode(env, code) {
+  if (!code) return false;
+  if (env.SYNC_TOKEN && code === env.SYNC_TOKEN) return true;
+  return String(env.USER_CODES || '').split(',').map((s) => s.trim()).filter(Boolean).includes(code);
+}
+export function doName(env, code) {
+  return (env.SYNC_TOKEN && code === env.SYNC_TOKEN) ? 'main' : 'user:' + code;
+}
+function userStore(env, code) {
+  return env.STORE.get(env.STORE.idFromName(doName(env, code)));
+}
+function authCode(request, env) {
+  const code = (request.headers.get('x-sync-token') || '').trim();
+  return validCode(env, code) ? code : null;
+}
+
+// ---- Sincronização: histórico único e permanente (por usuário) ----
 async function handleSync(request, env) {
   if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
 
@@ -124,15 +141,13 @@ async function handleSync(request, env) {
     return new Response('origin not allowed', { status: 403 });
   }
 
-  if (!env.SYNC_TOKEN) {
-    return jsonResp({ error: { message: 'SYNC_TOKEN não configurado: painel do worker → Settings → Variables and Secrets → Add Secret SYNC_TOKEN.' } }, 500);
+  if (!env.SYNC_TOKEN && !env.USER_CODES) {
+    return jsonResp({ error: { message: 'Nenhum código configurado: painel do worker → Settings → Variables and Secrets → Add Secret SYNC_TOKEN (e USER_CODES para convidados).' } }, 500);
   }
-  if ((request.headers.get('x-sync-token') || '') !== env.SYNC_TOKEN) {
-    return new Response('unauthorized', { status: 401 });
-  }
+  const code = authCode(request, env);
+  if (!code) return new Response('unauthorized', { status: 401 });
 
-  const id = env.STORE.idFromName('main');
-  return env.STORE.get(id).fetch(request);
+  return userStore(env, code).fetch(request);
 }
 
 function jsonResp(obj, status) {
@@ -341,6 +356,14 @@ async function proxyAnthropic(request, env) {
   const origin = request.headers.get('Origin');
   if (origin && origin !== new URL(request.url).origin) {
     return new Response('origin not allowed', { status: 403 });
+  }
+
+  // Só convidados gastam a chave da IA: exige código de acesso válido
+  // (quando o sistema de códigos está configurado).
+  if ((env.SYNC_TOKEN || env.USER_CODES) && !authCode(request, env)) {
+    return new Response(JSON.stringify({ error: { message: 'Código de acesso ausente ou inválido. Cola seu código no card HISTÓRICO NA NUVEM (aba GUIA) para liberar a IA.' } }), {
+      status: 401, headers: { 'content-type': 'application/json' },
+    });
   }
 
   if (!env.ANTHROPIC_API_KEY) {

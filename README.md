@@ -145,6 +145,13 @@ quarta (`PLAN_DAYS` com QUA opcional em `validatePlanShape`/`normalizePlan`/sche
   STRENGTH_TRAINING`, `activeDuration: "Ns"`, `metricsSummary.caloriesKcal` (~6kcal/min).
   Secrets: `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`. App em modo "Testing" no consent screen:
   refresh de 7 dias (publicar em produção resolve).
+- **Multiusuário por código de acesso**: cada código é um usuário com cofre próprio no
+  servidor (Durable Object separado: legado `SYNC_TOKEN` → DO `main`; convidados → DO
+  `user:<código>`). Quem pode entrar é definido pelos secrets do worker: `SYNC_TOKEN`
+  (código do dono) e `USER_CODES` (convidados, separados por vírgula). O código autentica
+  as três frentes — sync, proxy da IA (`/api/messages` agora exige `x-sync-token`) e
+  Fitbit (o callback OAuth descobre o usuário por cookie `fb_user` setado no authurl).
+  Convidado gasta a chave Anthropic do dono; manter limite de gasto no console.
 - **Histórico na nuvem (aba GUIA)**: treinos, medidas, plano e análise sincronizados entre
   aparelhos via `POST /api/sync` no worker (Durable Object SQLite, instância única "main").
   Autenticação por código: secret `SYNC_TOKEN` no worker + o mesmo código colado em cada
