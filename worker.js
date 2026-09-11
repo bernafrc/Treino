@@ -331,6 +331,14 @@ export class TreinoStore {
       await st.put('analysis', body.analysis);
     }
 
+    // 4b. academias: lista com "mais novo vence" (igual ao plano)
+    const gymsStamp = (await st.get('gymsStamp')) || '';
+    const inGyms = String(body.gymsStamp || '');
+    if (inGyms && inGyms > gymsStamp && Array.isArray(body.gyms)) {
+      await st.put('gymsStamp', inGyms);
+      await st.put('gyms', body.gyms.slice(0, 30).map((x) => String(x).slice(0, 60)));
+    }
+
     // 5. devolve o estado consolidado
     const hist = [...(await st.list({ prefix: 'h:' })).values()]
       .sort((a, b) => String(a.completedAt).localeCompare(String(b.completedAt)));
@@ -344,6 +352,8 @@ export class TreinoStore {
       plan: planRec ? planRec.plan : null,
       planMeta: planRec ? planRec.meta : null,
       analysis: (await st.get('analysis')) || null,
+      gyms: (await st.get('gyms')) || null,
+      gymsStamp: (await st.get('gymsStamp')) || '',
     });
   }
 }

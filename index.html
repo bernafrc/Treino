@@ -419,8 +419,9 @@
   .bioimp-go { font-family: 'Anton', sans-serif; font-size: 24px; color: var(--grav); }
 
   .rest-banner {
+    /* no topo: visível sem tapar séries e o botão de finalizar */
     position: fixed; left: 14px; right: 14px;
-    bottom: calc(14px + env(safe-area-inset-bottom));
+    top: calc(8px + env(safe-area-inset-top));
     background: var(--ink); color: #fff;
     border-radius: 16px; padding: 14px 18px;
     display: none; justify-content: space-between; align-items: center;
@@ -869,7 +870,10 @@ const K_TOMBS = 'wo_tombs_v1';       // ids apagados localmente, pendentes de su
 const K_LASTSYNC = 'wo_lastsync_v1';
 const K_PLANSTAMP = 'wo_planstamp_v1'; // quando o plano ativo mudou por último (pro "mais novo vence")
 const K_DAYMAP = 'wo_daymap_v1';     // troca de treino entre dias válida só na semana corrente
-const APP_BUILD = 'v14';             // manter igual ao CACHE_VERSION do sw.js (treino-vN)
+const K_GYMS = 'wo_gyms_v1';         // lista de academias (sincronizada, mais-novo-vence)
+const K_GYMSTAMP = 'wo_gymstamp_v1';
+const K_CURGYM = 'wo_curgym_v1';     // academia atual — por aparelho (você está NELA com ELE)
+const APP_BUILD = 'v15';             // manter igual ao CACHE_VERSION do sw.js (treino-vN)
 
 function loadStr(k){ try{return localStorage.getItem(k);}catch(e){return null;} }
 function loadObj(k){ try{const v=localStorage.getItem(k); return v?JSON.parse(v):null;}catch(e){return null;} }
@@ -899,6 +903,24 @@ let history = loadObj(K_HISTORY) || [];
 let bodyweight = loadObj(K_BW) || [];
 let activeSetCtx = null;
 let activeSwapCtx = null;
+
+// ---- Academias ----
+// Máquinas e barras variam entre academias, então cada sessão marca onde foi
+// feita: o prefill de peso prefere a última sessão NA MESMA academia.
+const DEFAULT_GYMS = ['Bodytech Jardim Botânico','Bodytech Asa Norte','Companhia Atlética'];
+let gyms = (function(){ const g=loadObj(K_GYMS); return (Array.isArray(g)&&g.length)?g:DEFAULT_GYMS.slice(); })();
+function curGym(){ const g=loadStr(K_CURGYM)||''; return gyms.includes(g)?g:''; }
+function gymShort(name){
+  if(!name) return '';
+  const w=String(name).trim().split(/\s+/);
+  return w[0]+(w.length>1?' '+w.slice(1).map(function(x){ return x[0]; }).join(''):'');
+}
+function saveGyms(stamped){
+  try{
+    localStorage.setItem(K_GYMS, JSON.stringify(gyms));
+    if(stamped) localStorage.setItem(K_GYMSTAMP, new Date().toISOString());
+  }catch(e){}
+}
 
 // A sincronização depende de id único por item; registros antigos (migrados
 // de v3/v4 ou importados) podem não ter. Carimba uma vez, deterministicamente.
@@ -985,12 +1007,20 @@ function completion(wId){
   });
   return { done, total, pct: total?Math.round(done/total*100):0 };
 }
-function lastSessionForExercise(name){
+// Última sessão do exercício. Com `gym`, prefere a mesma academia (os pesos
+// das máquinas variam entre elas) e só cai pra qualquer outra se não houver.
+function lastSessionForExercise(name, gym){
+  let anyMatch=null;
   for(let i=history.length-1;i>=0;i--){
-    const f = history[i].exercises.find(e=>e.name===name);
-    if(f) return { sets:f.sets, date:history[i].completedAt };
+    const s=history[i];
+    const f=s.exercises.find(e=>e.name===name);
+    if(!f) continue;
+    const hit={ sets:f.sets, date:s.completedAt, gym:s.gym||'' };
+    if(gym && s.gym===gym) return hit;
+    if(!anyMatch) anyMatch=hit;
+    if(!gym) return anyMatch;
   }
-  return null;
+  return anyMatch;
 }
 function maxWeightForExercise(name){
   let m=0; history.forEach(s=>s.exercises.forEach(e=>{ if(e.name===name) e.sets.forEach(x=>{ if(x.weight>m) m=x.weight; }); })); return m;
@@ -1050,13 +1080,15 @@ function renderStats(){
 function setActive(id){ active=id; saveAll(); render(); window.scrollTo({top:0,behavior:'smooth'}); }
 
 function renderExerciseCard(wId,ex,i,isCurrent){
-  const last=lastSessionForExercise(ex.name);
+  const last=lastSessionForExercise(ex.name, curGym());
   const allDone=exerciseDone(i,wId);
 
   let lastLine='';
   if(last){
     const setsStr=last.sets.map(s=>fmtWeight(s.weight)+'×'+s.reps).join(' / ');
-    lastLine='<div class="last-session"><span>Última: <strong>'+setsStr+'</strong></span><span class="when">'+fmtRelative(last.date)+'</span></div>';
+    // veio de outra academia? avisa, porque os pesos podem não bater
+    const gymTag=(curGym()&&last.gym!==curGym())?' · '+esc(gymShort(last.gym)||'outra acad.'):'';
+    lastLine='<div class="last-session"><span>Última: <strong>'+setsStr+'</strong></span><span class="when">'+fmtRelative(last.date)+gymTag+'</span></div>';
   }
 
   let setsHtml='';
@@ -1106,7 +1138,8 @@ function renderWorkout(tabId){
   const movedTag=(wId!==tabId)?'<span class="day-tag" style="background:var(--grav-soft);color:var(--grav)">⇆ treino de '+PLAN_SUBS[wId]+'</span> ':'';
   let html='<div class="section-head"><div class="eyebrow">'+esc(PLAN_SUBS[tabId]||w.sub)+'</div><div class="display">'+esc(w.title)+'</div>'
     +'<div>'+movedTag+(w.day?'<div class="day-tag">'+esc(w.day)+'</div>':'')
-    +' <button class="day-tag" style="border:1px dashed var(--border-strong);background:transparent;color:var(--mute);cursor:pointer" onclick="openDaySwap(\''+tabId+'\')">⇆ trocar o treino do dia</button></div>'
+    +' <button class="day-tag" style="border:1px dashed var(--border-strong);background:transparent;color:var(--mute);cursor:pointer" onclick="openDaySwap(\''+tabId+'\')">⇆ trocar o treino do dia</button>'
+    +' <button class="day-tag" style="background:var(--grav-soft);color:var(--grav);cursor:pointer" onclick="openGymSheet()">📍 '+(curGym()?esc(gymShort(curGym())):'academia?')+'</button></div>'
     +'</div>';
 
   if(tabId==='SAB'){ // pesagem é do sábado (dia da semana), não do treino
@@ -1220,7 +1253,7 @@ function renderHistory(){
     html+='<div class="session">'
       +'<div class="session-head"><div><span class="session-code">'+sess.workoutId+'</span>'
       +'<span style="font-size:11px;color:var(--mute);margin-left:8px;font-weight:600">'+(w?esc(w.title):'')+'</span></div>'
-      +'<div class="session-date">'+fmtDate(sess.completedAt)+'</div></div>'
+      +'<div class="session-date">'+fmtDate(sess.completedAt)+(sess.gym?'<div style="font-size:9px;color:var(--faint);text-align:right;font-weight:700">'+esc(gymShort(sess.gym))+'</div>':'')+'</div></div>'
       +'<div class="session-volume"><span class="session-vol-main">'+fmtVol(vol)+'</span><span class="session-vol-sub">KG VOLUME</span>'+deltaHtml+'</div>'
       +'<div class="session-meta">'+sess.exercises.length+' exercícios · '+totalSets+' séries</div>'
       +noteHtml
@@ -1649,7 +1682,9 @@ function inferEq(name){
 }
 function defaultBarW(exName, plannedBar){
   const m=loadObj('wo_barw_v1')||{};
-  if(typeof m[exName]==='number') return m[exName]; // última barra usada neste exercício
+  const g=curGym();
+  if(g && typeof m[g+'|'+exName]==='number') return m[g+'|'+exName]; // barra desta academia
+  if(typeof m[exName]==='number') return m[exName]; // última barra em qualquer academia
   if(plannedBar) return plannedBar;
   return /\bW\b/i.test(exName)?10:20;
 }
@@ -1679,6 +1714,62 @@ function onBarWInput(){
   updateBarHint();
 }
 
+// ============ ACADEMIAS (escolher e gerenciar) ============
+function openGymSheet(){
+  renderGymSheet();
+  openSheetById('backup-sheet');
+}
+
+function renderGymSheet(){
+  document.getElementById('backup-eyebrow').textContent='ACADEMIA';
+  document.getElementById('backup-title').textContent='Onde você está treinando?';
+  const cur=curGym();
+  let html='<div style="font-size:12px;color:var(--mute);margin-bottom:10px">Cada sessão fica marcada com a academia — o app passa a sugerir os pesos da última vez <b>nesta</b> academia (máquinas e barras variam entre elas). A escolha vale só neste aparelho.</div>';
+  const mk=function(label,sel,onclick,delBtn){
+    return '<div style="display:flex;gap:6px;align-items:stretch;margin-bottom:7px">'
+      +'<button class="opt-row '+(sel?'sel':'')+'" style="margin-bottom:0;flex:1" onclick="'+onclick+'">'
+      +'<span>'+label+'</span>'+(sel?'<span class="opt-tag">ATUAL</span>':'')+'</button>'
+      +(delBtn||'')+'</div>';
+  };
+  html+=mk('Sem academia', !cur, 'pickGym(-1)');
+  gyms.forEach(function(g,i){
+    const del='<button class="swap-btn" style="align-self:center" onclick="delGym('+i+')" aria-label="Remover">×</button>';
+    html+=mk('📍 '+esc(g), cur===g, 'pickGym('+i+')', del);
+  });
+  html+='<div style="display:flex;gap:6px;margin-top:12px">'
+    +'<input class="ai-input" style="margin-bottom:0;flex:1" id="gym-new" placeholder="Nova academia (nome)">'
+    +'<button class="btn btn-primary" style="flex:0 0 auto;padding:12px 16px" onclick="addGym()">Adicionar</button></div>';
+  document.getElementById('backup-body').innerHTML=html;
+  document.getElementById('backup-actions').innerHTML='<button class="btn btn-secondary" onclick="closeAllSheets()">Fechar</button>';
+}
+
+function pickGym(i){
+  try{ localStorage.setItem(K_CURGYM, i<0?'':gyms[i]); }catch(e){}
+  closeAllSheets(); render();
+  showToast(i<0?'Sem academia marcada':('Treinando na '+gyms[i]));
+}
+
+function addGym(){
+  const el=document.getElementById('gym-new');
+  const v=(el?el.value:'').trim().slice(0,60);
+  if(!v){ showToast('Escreve o nome da academia'); return; }
+  if(!gyms.includes(v)) gyms.push(v);
+  saveGyms(true); queueSync();
+  try{ localStorage.setItem(K_CURGYM, v); }catch(e){} // já seleciona a nova
+  renderGymSheet(); render();
+  showToast('Academia adicionada: '+v);
+}
+
+function delGym(i){
+  const g=gyms[i]; if(!g) return;
+  askConfirm('Remover "'+g+'" da lista? As sessões antigas continuam marcadas com ela.', function(){
+    gyms.splice(i,1);
+    if((loadStr(K_CURGYM)||'')===g){ try{ localStorage.removeItem(K_CURGYM); }catch(e){} }
+    saveGyms(true); queueSync();
+    renderGymSheet(); render();
+  }, 'Remover');
+}
+
 function _openSetSheet(wId,exIdx,setIdx){
   const ex=effEx(wId,exIdx);
   const planned=WORKOUTS[wId].exercises[exIdx];
@@ -1699,7 +1790,7 @@ function _openSetSheet(wId,exIdx,setIdx){
     const prevSet=setIdx>0?getSet(exIdx,setIdx-1):null;
     if(prevSet){ pw=prevSet.weight; pr=prevSet.reps; peq=prevSet.eq||null; if(prevSet.barW) activeSetCtx.barW=prevSet.barW; }
     else {
-      const last=lastSessionForExercise(ex.name);
+      const last=lastSessionForExercise(ex.name, curGym());
       const ls=last?(last.sets[setIdx]||last.sets[0]):null;
       if(ls){ pw=ls.weight; pr=ls.reps; peq=ls.eq||null; if(ls.barW) activeSetCtx.barW=ls.barW; }
     }
@@ -1713,11 +1804,12 @@ function _openSetSheet(wId,exIdx,setIdx){
   if(!ex.graviton) renderEqChips();
   updateBarHint();
 
-  const last=lastSessionForExercise(ex.name);
+  const last=lastSessionForExercise(ex.name, curGym());
   const prev=document.getElementById('sheet-prev');
   if(last&&last.sets[setIdx]){
     const ls=last.sets[setIdx];
-    document.getElementById('sheet-prev-label').textContent=ex.graviton?'Última vez (ajuda)':'Última vez nesta série';
+    const gymSuf=(curGym()&&last.gym!==curGym())?' · '+(gymShort(last.gym)||'outra acad.'):'';
+    document.getElementById('sheet-prev-label').textContent=(ex.graviton?'Última vez (ajuda)':'Última vez nesta série')+gymSuf;
     document.getElementById('sheet-prev-val').textContent=fmtWeight(ls.weight)+' kg × '+ls.reps+' reps';
     prev.style.display='flex';
   } else prev.style.display='none';
@@ -1816,8 +1908,10 @@ function saveSet(){
     entry.eq=activeSetCtx.eq;
     if((entry.eq==='barra'||entry.eq==='smith') && activeSetCtx.barW>0){
       entry.barW=activeSetCtx.barW;
-      try{ // memoriza a barra usada neste exercício pra próxima vez
-        const m=loadObj('wo_barw_v1')||{}; m[exName]=activeSetCtx.barW;
+      try{ // memoriza a barra usada: por academia (as barras variam) e geral
+        const m=loadObj('wo_barw_v1')||{};
+        m[exName]=activeSetCtx.barW;
+        if(curGym()) m[curGym()+'|'+exName]=activeSetCtx.barW;
         localStorage.setItem('wo_barw_v1', JSON.stringify(m));
       }catch(e){}
     }
@@ -1866,6 +1960,7 @@ function finalizeWorkout(wId){
   });
   if(done.length===0){ showToast('Nada para finalizar ainda'); return; }
   const sess={ id:'sess_'+Date.now(), workoutId:wId, startedAt:current.startedAt, completedAt:new Date().toISOString(), exercises:done, note:(current.note||'').trim() };
+  if(curGym()) sess.gym=curGym();
   history.push(sess);
   current={ workoutId:null, startedAt:null, sets:{}, note:'', swaps:{} };
   active='HIST'; saveAll(); render();
@@ -1896,7 +1991,7 @@ function buildSummaryText(sess){
   const lines=[];
   const dur=(sess.startedAt&&sess.completedAt)?Math.round((new Date(sess.completedAt)-new Date(sess.startedAt))/60000):null;
   const totalSets=sess.exercises.reduce(function(a,e){ return a+e.sets.length; },0);
-  lines.push('TREINO '+sess.workoutId+(w?' · '+w.title:'')+' — '+fmtDate(sess.completedAt));
+  lines.push('TREINO '+sess.workoutId+(w?' · '+w.title:'')+' — '+fmtDate(sess.completedAt)+(sess.gym?' — '+sess.gym:''));
   lines.push((dur?('Duração: '+dur+' min · '):'')+'Volume: '+Math.round(sessionVolume(sess))+' kg · '+totalSets+' séries');
   lines.push('');
   sess.exercises.forEach(function(e){
@@ -2158,7 +2253,7 @@ function aiHistorySummary(){
       e.sets.forEach(function(x){ if(x.weight*x.reps>best.weight*best.reps) best=x; });
       return '  - '+e.name+': '+e.sets.length+' séries, melhor '+fmtWeight(best.weight)+'kg×'+best.reps+', vol '+Math.round(exerciseVolume(e.sets));
     }).join('\n');
-    return s.workoutId+' '+String(s.completedAt).slice(0,10)+' (vol total '+Math.round(sessionVolume(s))+')'
+    return s.workoutId+' '+String(s.completedAt).slice(0,10)+' (vol total '+Math.round(sessionVolume(s))+')'+(s.gym?' @ '+s.gym:'')
       +(s.note?' — nota: '+s.note:'')+'\n'+lines;
   }).join('\n');
 }
@@ -2461,6 +2556,7 @@ function analysisSystemPrompt(){
     +'- problemas: estagnação (mesma carga por semanas), desequilíbrios de volume entre grupos musculares, consistência (buracos entre sessões), técnica/dor citada nas notas, séries sem progressão planejada.\n'
     +'- recomendacoes: mudanças práticas e específicas (o que fazer no próximo treino/semana), incluindo metas numéricas quando fizer sentido.\n'
     +'- Exercícios marcados com (graviton: peso = ajuda) são assistidos: peso MENOR = mais forte. Não trate queda de peso neles como regressão.\n'
+    +'- Sessões podem indicar a academia (@): máquinas e barras variam entre academias — diferença de carga entre academias diferentes NÃO é progressão nem regressão automática.\n'
     +'- Considere as notas de sessão (sono, dor, incômodo) e as medidas corporais, se houver.\n'
     +'- veredito: 2-3 frases resumindo o período.\n'
     +'- titulo de cada item: curto (máx ~40 caracteres). detalhe: 1-3 frases com os números.';
@@ -2479,7 +2575,7 @@ function analysisUserMsg(fromStr){
       const sets=e.sets.map(function(x){ return fmtWeight(x.weight)+'x'+x.reps; }).join(', ');
       return '  - '+e.name+grav+': '+sets;
     }).join('\n');
-    return s.workoutId+' '+String(s.completedAt).slice(0,10)+' (vol '+Math.round(sessionVolume(s))+')'
+    return s.workoutId+' '+String(s.completedAt).slice(0,10)+' (vol '+Math.round(sessionVolume(s))+')'+(s.gym?' @ '+s.gym:'')
       +(s.note?' — nota: "'+s.note+'"':'')+'\n'+exs;
   }).join('\n');
   const planLean={};
@@ -2693,7 +2789,9 @@ async function syncNow(){
       plan: loadObj(K_PLAN),
       planMeta: loadObj(K_PLAN_META),
       planStamp: loadStr(K_PLANSTAMP)||'',
-      analysis: loadObj(K_ANALYSIS)
+      analysis: loadObj(K_ANALYSIS),
+      gyms: gyms,
+      gymsStamp: loadStr(K_GYMSTAMP)||''
     };
     const resp=await fetch('/api/sync',{
       method:'POST',
@@ -2727,6 +2825,10 @@ async function syncNow(){
       if(!cur || String(data.analysis.generatedAt||'')>String(cur.generatedAt||'')){
         try{ localStorage.setItem(K_ANALYSIS, JSON.stringify(data.analysis)); }catch(e){}
       }
+    }
+    if(Array.isArray(data.gyms) && String(data.gymsStamp||'')>String(loadStr(K_GYMSTAMP)||'')){
+      gyms=data.gyms;
+      try{ localStorage.setItem(K_GYMS, JSON.stringify(gyms)); localStorage.setItem(K_GYMSTAMP, data.gymsStamp); }catch(e){}
     }
     tombs={};
     try{ localStorage.setItem(K_TOMBS,'{}'); localStorage.setItem(K_LASTSYNC, new Date().toISOString()); }catch(e){}
@@ -2945,6 +3047,9 @@ function renderGuide(){
   html+=renderAiCard();
   html+=renderSyncCard();
   html+=renderFitbitCard();
+  html+='<div class="guide-card" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:16px">'
+    +'<div><div class="guide-label">ACADEMIA</div><div class="guide-value" style="font-size:13px">'+(curGym()?esc(curGym()):'nenhuma escolhida')+'</div></div>'
+    +'<button class="data-btn" style="flex:0 0 auto" onclick="openGymSheet()">GERENCIAR</button></div>';
   // atualização manual: PWA instalado no iOS não tem "puxar pra recarregar"
   html+='<div class="guide-card" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:16px">'
     +'<div><div class="guide-label">APP</div><div class="guide-value" style="font-size:12px;color:var(--mute)">versão '+APP_BUILD+' · atualiza sozinho ao abrir; use o botão se quiser forçar</div></div>'

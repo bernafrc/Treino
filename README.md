@@ -98,6 +98,13 @@ quarta (`PLAN_DAYS` com QUA opcional em `validatePlanShape`/`normalizePlan`/sche
 - **Histórico**: sessões com volume, notas e detalhamento por exercício.
 - **Backup**: exportar/importar via texto JSON (copiar e colar).
 - **Exportar PDF**: gera um relatório e chama a impressão nativa (no iOS: Compartilhar > Salvar em PDF).
+- **Academias (📍 no topo do dia / card no GUIA)**: lista gerenciável de academias
+  (sincronizada entre aparelhos, mais-novo-vence em `wo_gyms_v1`/`gymsStamp`; a academia ATUAL
+  é por aparelho, `wo_curgym_v1`). Cada sessão finalizada grava `gym`; o prefill de pesos
+  prefere a última sessão NA MESMA academia (com aviso quando vem de outra), a memória de peso
+  da barra é por academia+exercício, e a IA recebe o @academia nas sessões (com regra de não
+  tratar diferença entre academias como progressão). Timer de descanso fica fixo no TOPO da
+  tela.
 - **Troca de treino entre dias (⇆ no topo do dia)**: em qualquer dia dá pra fazer outro treino
   da semana — os dois dias trocam de lugar (nada some). Modo "só esta semana" usa `wo_daymap_v1`
   (permutação aba→dia do plano, expira na segunda seguinte, local ao aparelho); modo
