@@ -14,6 +14,7 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === '/api/messages') return proxyAnthropic(request, env);
     if (url.pathname === '/api/sync') return handleSync(request, env);
+    if (url.pathname === '/api/reset') return handleReset(request, env);
     if (url.pathname.startsWith('/api/fitbit/')) return handleFitbitRoute(request, env, url);
     if (env.ASSETS) return env.ASSETS.fetch(request);
     return new Response('not found', { status: 404 });
@@ -132,6 +133,19 @@ function authCode(request, env) {
   return validCode(env, code) ? code : null;
 }
 
+// Recomeço total do usuário: apaga TODO o cofre do código autenticado
+// (o botão "Começar do zero" do app chama isto junto com a limpeza local).
+async function handleReset(request, env) {
+  if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
+  const origin = request.headers.get('Origin');
+  if (origin && origin !== new URL(request.url).origin) {
+    return new Response('origin not allowed', { status: 403 });
+  }
+  const code = authCode(request, env);
+  if (!code) return new Response('unauthorized', { status: 401 });
+  return userStore(env, code).fetch(request);
+}
+
 // ---- Sincronização: histórico único e permanente (por usuário) ----
 async function handleSync(request, env) {
   if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
@@ -163,6 +177,7 @@ export class TreinoStore {
 
   async fetch(request) {
     const path = new URL(request.url).pathname;
+    if (path === '/api/reset') { await this.storage.deleteAll(); return jsonResp({ ok: true }); }
     if (path.startsWith('/api/fitbit/')) return this.fitbit(request, path);
     return this.handleSync(request);
   }

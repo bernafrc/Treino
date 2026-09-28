@@ -152,6 +152,14 @@ quarta (`PLAN_DAYS` com QUA opcional em `validatePlanShape`/`normalizePlan`/sche
   STRENGTH_TRAINING`, `activeDuration: "Ns"`, `metricsSummary.caloriesKcal` (~6kcal/min).
   Secrets: `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`. App em modo "Testing" no consent screen:
   refresh de 7 dias (publicar em produção resolve).
+- **Começar do zero (card APP no GUIA)**: duplo confirm → `POST /api/reset` (deleteAll no
+  Durable Object do código autenticado) + limpeza de todo `wo_*` local + reload. Existe pro
+  caso de aparelho com dados de outra pessoa ter contaminado o cofre errado via sync.
+- **Structured outputs compactos**: o schema do plano usa `$defs` (1 definição de dia/exercício
+  em vez de 7 cópias), todas as propriedades required e `alts` como strings — o formato antigo
+  estourava o limite da API ("compiled grammar is too large"). Se ainda assim der 400 de
+  gramática, `aiRequest` refaz automaticamente sem `output_config` (JSON só por prompt) e o
+  parser tolera cercas ```json. Alternativa assistida marca-se com "(graviton)" no nome.
 - **Multiusuário por código de acesso**: cada código é um usuário com cofre próprio no
   servidor (Durable Object separado: legado `SYNC_TOKEN` → DO `main`; convidados → DO
   `user:<código>`). Quem pode entrar é definido pelos secrets do worker: `SYNC_TOKEN`

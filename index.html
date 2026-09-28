@@ -873,7 +873,7 @@ const K_DAYMAP = 'wo_daymap_v1';     // troca de treino entre dias válida só n
 const K_GYMS = 'wo_gyms_v1';         // lista de academias (sincronizada, mais-novo-vence)
 const K_GYMSTAMP = 'wo_gymstamp_v1';
 const K_CURGYM = 'wo_curgym_v1';     // academia atual — por aparelho (você está NELA com ELE)
-const APP_BUILD = 'v15';             // manter igual ao CACHE_VERSION do sw.js (treino-vN)
+const APP_BUILD = 'v16';             // manter igual ao CACHE_VERSION do sw.js (treino-vN)
 
 function loadStr(k){ try{return localStorage.getItem(k);}catch(e){return null;} }
 function loadObj(k){ try{const v=localStorage.getItem(k); return v?JSON.parse(v):null;}catch(e){return null;} }
@@ -1535,7 +1535,7 @@ function renderSwapBody(){
       +'</button>';
   };
   let html=mk(base.name,!!base.graviton,'DO PLANO',!cur,-1);
-  alts.forEach(function(a,i){ html+=mk(a.name,!!a.graviton,'',!!(cur&&cur.name===a.name),i); });
+  alts.forEach(function(a,i){ html+=mk(a.name,!!a.graviton||/graviton/i.test(a.name),'',!!(cur&&cur.name===a.name),i); });
   document.getElementById('swap-body').innerHTML=html;
 }
 
@@ -1547,7 +1547,7 @@ function applySwap(altIdx){
   if(altIdx>=0 && !target) return;
   const doIt=function(){
     if(!current.swaps) current.swaps={};
-    if(target) current.swaps[ctx.exIdx]={ name:target.name, graviton:!!target.graviton };
+    if(target) current.swaps[ctx.exIdx]={ name:target.name, graviton:!!target.graviton||/graviton/i.test(target.name) };
     else delete current.swaps[ctx.exIdx];
     saveAll(); closeAllSheets(); render();
     showToast(target?('Hoje: '+target.name):('De volta: '+base.name));
@@ -2183,42 +2183,38 @@ function setAiStatus(t){
 function aiCancel(){ if(aiAbortCtl) aiAbortCtl.abort(); }
 
 function planSchema(){
-  const exercise={
-    type:'object',
-    properties:{
-      name:{type:'string'},
-      sets:{type:'integer'},
-      reps:{type:'string'},
-      rest:{type:'integer'},
-      finisher:{type:'boolean'},
-      graviton:{type:'boolean'},
-      info:{type:'string'},
-      bar:{type:'integer'},
-      alts:{type:'array',items:{
-        type:'object',
-        properties:{ name:{type:'string'}, graviton:{type:'boolean'} },
-        required:['name','graviton'],
-        additionalProperties:false
-      }}
-    },
-    required:['name','sets','reps','rest','finisher','graviton','alts'],
-    additionalProperties:false
-  };
-  const day={
-    type:'object',
-    properties:{
-      title:{type:'string'},
-      day:{type:'string'},
-      exercises:{type:'array',items:exercise}
-    },
-    required:['title','day','exercises'],
-    additionalProperties:false
-  };
+  // Compacto de propósito: a API compila o schema numa gramática e o formato
+  // antigo estourava o limite ("compiled grammar is too large"). $defs em vez
+  // de 7 cópias do dia, tudo required (sem ramificação de opcionais) e alts
+  // como strings simples.
+  const day={ '$ref':'#/$defs/day' };
   return {
     type:'object',
     properties:{ SEG:day, TER:day, QUA:day, QUI:day, SEX:day, SAB:day, DOM:day, resumo:{type:'string'} },
     required:['SEG','TER','QUI','SEX','SAB','DOM','resumo'], // QUA opcional
-    additionalProperties:false
+    additionalProperties:false,
+    '$defs':{
+      day:{
+        type:'object',
+        properties:{
+          title:{type:'string'},
+          day:{type:'string'},
+          exercises:{type:'array',items:{'$ref':'#/$defs/ex'}}
+        },
+        required:['title','day','exercises'],
+        additionalProperties:false
+      },
+      ex:{
+        type:'object',
+        properties:{
+          name:{type:'string'}, sets:{type:'integer'}, reps:{type:'string'},
+          rest:{type:'integer'}, finisher:{type:'boolean'}, graviton:{type:'boolean'},
+          info:{type:'string'}, bar:{type:'integer'}, alts:{type:'array',items:{type:'string'}}
+        },
+        required:['name','sets','reps','rest','finisher','graviton','info','bar','alts'],
+        additionalProperties:false
+      }
+    }
   };
 }
 
@@ -2234,10 +2230,10 @@ function aiSystemPrompt(){
     +'FORMATO:\n'
     +'- Nomes de exercícios em português do Brasil, curtos (máx ~40 caracteres).\n'
     +'- Cada dia: title (ex: "PEITO + TRÍCEPS", máx 25 caracteres), day (complemento, ex: "+ ABDÔMEN"), exercises na ordem de execução com finishers por último.\n'
-    +'- Cada exercício: sets (2 a 5), reps como faixa (ex "8-10"), rest em segundos (120 compostos pesados, 90 compostos médios, 60 isoladores, 45 finishers), finisher true só para abdômen/panturrilha, e 4 a 6 alts (alternativas similares, incluindo variações de equipamento: barra, halter, máquina, polia).\n'
+    +'- Cada exercício: sets (2 a 5), reps como faixa (ex "8-10"), rest em segundos (120 compostos pesados, 90 compostos médios, 60 isoladores, 45 finishers), finisher true só para abdômen/panturrilha, e 4 a 6 alts como TEXTO SIMPLES (só o nome da alternativa; inclua variações de equipamento: barra, halter, máquina, polia; alternativa assistida leva "(graviton)" no nome).\n'
     +'- graviton: true SOMENTE para exercícios em máquina assistida (graviton), onde o peso lançado é a AJUDA da máquina (menos peso = mais forte). Ex: barra fixa no graviton, paralelas no graviton. Puxada na polia NÃO é graviton.\n'
     +'- info: 1 a 3 frases por exercício explicando por que ele está nesse dia/posição e o que o diferencia dos parecidos do plano (ex: tríceps pulley = cabeça lateral, francês = cabeça longa alongada).\n'
-    +'- bar: só para exercícios de barra livre, o peso da barra em kg (20 olímpica, 10 barra W). Omitir em máquinas, halteres e polias.\n'
+    +'- bar: peso da barra em kg para exercícios de barra livre (20 olímpica, 10 barra W); use 0 em máquinas, halteres, polias e peso do corpo.\n'
     +'- resumo: 2 a 4 frases, em português, explicando o que mudou em relação ao plano atual e por quê, com base no histórico.\n\n'
     +'Use o histórico para calibrar: exercícios estagnados podem ser trocados ou ter esquema de reps ajustado; o que está progredindo bem deve ser mantido. Leve as notas de sessão a sério (dores, sono, incômodos).\n\n'
     +'MUDANÇA PONTUAL: se as instruções do aluno pedirem uma alteração específica (ex: "troca o exercício 03 de domingo", "tira o stiff"), faça SOMENTE o que foi pedido e reproduza todo o resto do plano atual IDÊNTICO — mesmos nomes, séries, reps, rest, alts, infos e títulos. Nesse caso o resumo deve dizer só o que mudou. Recalibre o plano inteiro apenas quando o aluno não pedir nada específico ou pedir uma revisão geral.\n\n'
@@ -2334,9 +2330,10 @@ async function aiRequest(key, useFallbacks, sys, usr, schema){
       max_tokens:64000,
       stream:true,
       system:sys,
-      messages:[{role:'user',content:usr}],
-      output_config:{ format:{ type:'json_schema', schema:schema||planSchema() } }
+      messages:[{role:'user',content:usr}]
     };
+    // schema==='none' = pedir JSON só por prompt (plano B quando a gramática estoura)
+    if(schema!=='none') body.output_config={ format:{ type:'json_schema', schema:schema||planSchema() } };
     // Com proxy configurado, a chave mora no servidor (secret do Worker) e o
     // navegador não envia credencial nenhuma. Sem proxy, chamada direta com a chave local.
     const proxy=aiProxy();
@@ -2362,6 +2359,10 @@ async function aiRequest(key, useFallbacks, sys, usr, schema){
     if(!resp.ok){
       let msg='HTTP '+resp.status;
       try{ const j=await resp.json(); if(j.error&&j.error.message) msg=j.error.message; }catch(e){}
+      if(resp.status===400 && schema!=='none' && /grammar|schema|strict/i.test(msg)){
+        // gramática do structured output estourou o limite: refaz só por prompt
+        return await aiRequest(key,useFallbacks,sys,usr,'none');
+      }
       if(resp.status===400 && useFallbacks) return await aiRequest(key,false,sys,usr,schema);
       const err=new Error(msg); err.status=resp.status; throw err;
     }
@@ -2369,8 +2370,13 @@ async function aiRequest(key, useFallbacks, sys, usr, schema){
     if(out.err) throw new Error(out.err);
     if(out.stop==='refusal') throw new Error('A IA recusou gerar. Reformula as instruções e tenta de novo.');
     if(out.stop==='max_tokens') throw new Error('Resposta cortada no limite. Tenta de novo.');
-    let obj;
-    try{ obj=JSON.parse(out.text); }catch(e){ throw new Error('A resposta não veio em JSON válido. Tenta de novo.'); }
+    let obj=null;
+    try{ obj=JSON.parse(out.text); }catch(e){
+      // sem structured output o modelo pode cercar o JSON com ```json ... ```
+      const m=out.text.match(/\{[\s\S]*\}/);
+      if(m){ try{ obj=JSON.parse(m[0]); }catch(e2){} }
+    }
+    if(!obj) throw new Error('A resposta não veio em JSON válido. Tenta de novo.');
     return obj;
   } finally {
     clearTimeout(killer);
@@ -2463,9 +2469,9 @@ function aiConvertSystemPrompt(){
     +'- rest em segundos se o texto disser; senão estime: 120 compostos pesados, 90 compostos médios, 60 isoladores, 45 finishers.\n'
     +'- finisher: true para abdômen/panturrilha no fim do treino.\n'
     +'- graviton: true SOMENTE para exercícios em máquina assistida (graviton/assistida), onde o peso lançado é a ajuda. Puxada na polia NÃO é graviton.\n'
-    +'- alts: gere 4 a 6 alternativas similares por exercício (variações de barra/halter/máquina/polia), mesmo que o texto não traga.\n'
+    +'- alts: gere 4 a 6 alternativas por exercício como TEXTO SIMPLES (só nomes; variações de barra/halter/máquina/polia), mesmo que o texto não traga.\n'
     +'- info: gere 1 a 3 frases por exercício explicando por que ele está naquele dia e o que o diferencia dos parecidos, mesmo que o texto não traga.\n'
-    +'- bar: só para exercícios de barra livre, peso da barra em kg (20 olímpica, 10 W); omitir nos demais.\n'
+    +'- bar: peso da barra em kg para barra livre (20 olímpica, 10 W); use 0 nos demais.\n'
     +'- title de cada dia: grupos trabalhados (ex "PEITO + TRÍCEPS", máx 25 caracteres). day: complemento curto (ex "+ ABDÔMEN") ou string vazia.\n'
     +'- resumo: 2 a 4 frases dizendo como o texto foi mapeado e o que foi assumido.\n\n'
     +'Responda apenas com o JSON pedido.';
@@ -3053,7 +3059,8 @@ function renderGuide(){
   // atualização manual: PWA instalado no iOS não tem "puxar pra recarregar"
   html+='<div class="guide-card" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:16px">'
     +'<div><div class="guide-label">APP</div><div class="guide-value" style="font-size:12px;color:var(--mute)">versão '+APP_BUILD+' · atualiza sozinho ao abrir; use o botão se quiser forçar</div></div>'
-    +'<button class="data-btn" style="flex:0 0 auto" onclick="appUpdate()">ATUALIZAR</button></div>';
+    +'<button class="data-btn" style="flex:0 0 auto" onclick="appUpdate()">ATUALIZAR</button></div>'
+    +'<button class="reset-link" style="margin:2px auto 16px" onclick="appReset()">Começar do zero neste aparelho (apaga aparelho + minha nuvem)</button>';
   html+='<div class="schedule"><div class="schedule-label">SEMANA</div><div class="schedule-grid">'
     +days.map(d=>'<div class="day '+(d.rest?'rest':'')+'"><div class="day-name">'+d.n+'</div><div class="day-code">'+(d.rest?'OFF':d.c)+'</div></div>').join('')
     +'</div>'
@@ -3264,6 +3271,25 @@ function exportPDF(){
   // give it a tick to render, then call print (iOS shows Save to PDF)
   setTimeout(function(){ try{ win.focus(); win.print(); }catch(e){} }, 600);
   showToast('Toque em Compartilhar → Salvar em PDF');
+}
+
+// Recomeço total: apaga a nuvem DESTE código e os dados locais do aparelho.
+// Existe pro caso clássico: alguém usou um aparelho que já tinha dados de
+// outra pessoa e a sincronização misturou tudo no cofre errado.
+function appReset(){
+  askConfirm('COMEÇAR DO ZERO apaga os treinos, medidas, plano e análises deste aparelho E da nuvem do código atual. Outros usuários não são afetados. Continuar?', function(){
+    askConfirm('Última confirmação: apagar tudo de verdade? Não tem volta.', async function(){
+      try{
+        if(syncEnabled()){
+          await fetch('/api/reset',{ method:'POST', headers:{ 'content-type':'application/json', 'x-sync-token':(loadStr(K_SYNCTOKEN)||'').trim() }, body:'{}' });
+        }
+      }catch(e){}
+      try{
+        Object.keys(localStorage).forEach(function(k){ if(k.indexOf('wo_')===0) localStorage.removeItem(k); });
+      }catch(e){}
+      location.reload();
+    }, 'Apagar tudo');
+  }, 'Continuar');
 }
 
 // Força busca de versão nova: atualiza o service worker e recarrega a página
