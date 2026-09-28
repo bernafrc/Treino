@@ -79,8 +79,12 @@ Regra anti-buraco (semana ruim): inegociáveis são SEG, TER, SEX e os dois dias
 QUI e SÁB caem primeiro. Meta da barra fixa: escada de ajuda 18→15→12→9→6→3→livre, um degrau
 a cada 1-2 semanas.
 
-O app suporta plano de 6 ou 7 dias: a aba QUA só aparece se o plano ativo tiver treino na
-quarta (`PLAN_DAYS` com QUA opcional em `validatePlanShape`/`normalizePlan`/schema da IA).
+O app suporta planos de 2 a 7 dias de treino: QUALQUER dia pode ser descanso e a aba some
+(`validatePlanShape` exige >=2 dias válidos; `normalizePlan` trata chave ausente ou
+`exercises` vazio como descanso; no schema da IA todos os dias são opcionais e os prompts
+mandam OMITIR dias de descanso). O preview de plano gerado/importado persiste em
+`wo_pendingplan_v1` (sobrevive ao iOS recarregar o PWA) com botão de recuperação no card
+do Motor IA; aplicar limpa o pendente.
 
 ---
 

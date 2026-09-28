@@ -873,21 +873,30 @@ const K_DAYMAP = 'wo_daymap_v1';     // troca de treino entre dias válida só n
 const K_GYMS = 'wo_gyms_v1';         // lista de academias (sincronizada, mais-novo-vence)
 const K_GYMSTAMP = 'wo_gymstamp_v1';
 const K_CURGYM = 'wo_curgym_v1';     // academia atual — por aparelho (você está NELA com ELE)
-const APP_BUILD = 'v17';             // manter igual ao CACHE_VERSION do sw.js (treino-vN)
+const K_PENDING = 'wo_pendingplan_v1'; // preview gerado e ainda não aplicado (sobrevive a reload)
+const APP_BUILD = 'v18';             // manter igual ao CACHE_VERSION do sw.js (treino-vN)
 
 function loadStr(k){ try{return localStorage.getItem(k);}catch(e){return null;} }
 function loadObj(k){ try{const v=localStorage.getItem(k); return v?JSON.parse(v):null;}catch(e){return null;} }
 
 const PLAN_SUBS = { SEG:'SEGUNDA', TER:'TERÇA', QUA:'QUARTA', QUI:'QUINTA', SEX:'SEXTA', SAB:'SÁBADO', DOM:'DOMINGO' };
 const PLAN_DAYS = ['SEG','TER','QUA','QUI','SEX','SAB','DOM']; // QUA é opcional no plano
-const PLAN_REQUIRED = ['SEG','TER','QUI','SEX','SAB','DOM'];
 function validDay(d){
   return d && typeof d.title==='string'
     && Array.isArray(d.exercises) && d.exercises.length>0
     && d.exercises.every(e => e && typeof e.name==='string' && e.sets>0);
 }
+// Desde o v18 QUALQUER dia pode ser descanso (a aba some): um plano vale se
+// tiver de 2 a 7 dias de treino válidos e nenhum dia presente for inválido.
 function validatePlanShape(p){
-  return !!p && PLAN_REQUIRED.every(k => validDay(p[k])) && (!p.QUA || validDay(p.QUA));
+  if(!p) return false;
+  let n=0;
+  for(const k of PLAN_DAYS){
+    if(p[k]===undefined || p[k]===null) continue;
+    if(!validDay(p[k])) return false;
+    n++;
+  }
+  return n>=2;
 }
 // WORKOUTS é o plano ativo: o gerado pela IA se houver um válido salvo, senão o original.
 let WORKOUTS = (function(){
@@ -1055,7 +1064,7 @@ function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').rep
 // ============ RENDER ============
 function render(){
   // aba de dia que não existe no plano ativo (ex: QUA depois de restaurar plano de 6 dias)
-  if(active!=='HIST'&&active!=='CORPO'&&active!=='GUIA'&&!WORKOUTS[active]) active='SEG';
+  if(active!=='HIST'&&active!=='CORPO'&&active!=='GUIA'&&!WORKOUTS[active]) active=PLAN_DAYS.find(function(k){ return WORKOUTS[k]; })||'GUIA';
   renderTabs();
   renderStats();
   const c = document.getElementById('content');
@@ -2191,7 +2200,7 @@ function planSchema(){
   return {
     type:'object',
     properties:{ SEG:day, TER:day, QUA:day, QUI:day, SEX:day, SAB:day, DOM:day, resumo:{type:'string'} },
-    required:['SEG','TER','QUI','SEX','SAB','DOM','resumo'], // QUA opcional
+    required:['resumo'], // dias de descanso são OMITIDOS (2 a 7 dias de treino)
     additionalProperties:false,
     '$defs':{
       day:{
@@ -2221,10 +2230,10 @@ function planSchema(){
 function aiSystemPrompt(){
   return 'Você é um personal trainer experiente, especialista em hipertrofia e recomposição corporal, montando o plano semanal de um aluno intermediário que treina em academia comercial (máquinas, halteres, barras, polias e graviton).\n\n'
     +'REGRAS FIXAS DO PLANO (não negociáveis):\n'
-    +'- Chaves de dia: SEG, TER, QUA, QUI, SEX, SAB, DOM. QUA (quarta) é opcional: inclua QUA se o plano atual do aluno tiver treino nela, e omita se for descanso — a menos que as instruções do aluno peçam diferente.\n'
+    +'- Chaves de dia: SEG, TER, QUA, QUI, SEX, SAB, DOM. Inclua SOMENTE os dias de treino (2 a 7 por semana) e OMITA completamente as chaves dos dias de descanso — nunca mande um dia com exercises vazio. Quantidade de dias: siga as instruções do aluno; sem instrução, mantenha a quantidade do plano atual.\n'
     +'- Treinos úteis de até ~45 min (SAB e DOM podem ser um pouco mais longos). Isso limita o número de séries por dia.\n'
     +'- Abdômen como finisher nos dias de membros superiores; panturrilha como finisher nos dias de perna (siga o padrão do plano atual).\n'
-    +'- Dois dias de perna quando o plano tiver 7 dias; posterior de coxa separado do quadríceps pesado por pelo menos 2 dias.\n'
+    +'- Em planos de 6-7 dias: dois dias de perna, posterior separado do quadríceps pesado por pelo menos 2 dias. Em planos de 3-5 dias: distribua os grupos com pelo menos 1 dia de descanso entre estímulos do mesmo músculo.\n'
     +'- Progressão: primeiro repetições, depois carga. Evitar falha absoluta em toda série.\n'
     +'- Objetivo: hipertrofia, recomposição corporal, estética.\n\n'
     +'FORMATO:\n'
@@ -2401,8 +2410,9 @@ function normalizePlan(raw){
   const out={};
   for(const k of PLAN_DAYS){
     const d=raw[k];
-    if(k==='QUA' && !d) continue; // quarta é opcional
-    if(!d||!Array.isArray(d.exercises)||d.exercises.length<1||d.exercises.length>12) return null;
+    // dia ausente ou sem exercícios = descanso (a aba não aparece)
+    if(!d || !Array.isArray(d.exercises) || d.exercises.length===0) continue;
+    if(d.exercises.length>12) return null;
     let exs=d.exercises.map(function(e){
       if(!e||typeof e.name!=='string'||!e.name.trim()) return null;
       const o={
@@ -2435,7 +2445,7 @@ function normalizePlan(raw){
       exercises:exs
     };
   }
-  return out;
+  return validatePlanShape(out) ? out : null;
 }
 
 async function aiGenerate(){
@@ -2463,7 +2473,7 @@ async function aiGenerate(){
 function aiConvertSystemPrompt(){
   return 'Você é um assistente que converte treinos escritos em texto livre para um formato JSON fixo de app de treino. NÃO invente um plano novo: preserve fielmente os exercícios, a ordem, as séries e as repetições do texto colado.\n\n'
     +'REGRAS DE CONVERSÃO:\n'
-    +'- Chaves de dia do app: SEG, TER, QUA, QUI, SEX, SAB, DOM — QUA (quarta) é opcional: use se o texto tiver treino na quarta, omita se não tiver. Se o texto nomear dias da semana, mapeie direto. Se tiver menos treinos que dias (ex: ABC, upper/lower), distribua na semana repetindo na ordem (ex: ABC → SEG=A TER=B QUI=C SEX=A SAB=B DOM=C, sem QUA) e explique no resumo. Se tiver mais dias que o app comporta, funda os mais parecidos e explique.\n'
+    +'- Chaves de dia do app: SEG, TER, QUA, QUI, SEX, SAB, DOM. Inclua SÓ os dias que têm treino e OMITA as chaves dos dias de descanso (nunca mande exercises vazio). Se o texto nomear dias da semana, mapeie direto. Se for um ciclo sem dias fixos (ABC, upper/lower), distribua nos dias mais espaçados possível respeitando a quantidade de treinos do texto e explique no resumo.\n'
     +'- Nomes de exercícios em português do Brasil, curtos (máx ~40 caracteres), mantendo o equipamento citado.\n'
     +'- sets: número de séries do texto (se faltar, 3). reps: faixa como string (se faltar, "10-12").\n'
     +'- rest em segundos se o texto disser; senão estime: 120 compostos pesados, 90 compostos médios, 60 isoladores, 45 finishers.\n'
@@ -2691,11 +2701,14 @@ function reopenAnalysis(){
 function todayTabId(){
   const map=['DOM','SEG','TER','QUA','QUI','SEX','SAB'];
   const t=map[new Date().getDay()];
-  return WORKOUTS[t]?t:'SEG';
+  if(WORKOUTS[t]) return t;
+  return PLAN_DAYS.find(function(k){ return WORKOUTS[k]; })||'GUIA';
 }
 
 function openPlanPreview(plan, resumo){
   aiPendingPlan=plan; aiPendingResumo=resumo||'';
+  // persiste: se o iOS recarregar o app (notificação, troca de app), nada se perde
+  try{ localStorage.setItem(K_PENDING, JSON.stringify({ plan:plan, resumo:aiPendingResumo, at:new Date().toISOString() })); }catch(e){}
   document.getElementById('backup-eyebrow').textContent='PLANO GERADO PELA IA';
   document.getElementById('backup-title').textContent='Revisar antes de aplicar';
   let html='';
@@ -2720,6 +2733,14 @@ function openPlanPreview(plan, resumo){
     +'<button class="btn btn-secondary" style="color:var(--grav);border-color:var(--grav)" onclick="toggleAdjust()">Pedir ajuste</button>'
     +'<button class="btn btn-primary" onclick="applyAiPlan()">Aplicar</button>';
   openSheetById('backup-sheet');
+}
+
+function recoverPending(){
+  const pend=loadObj(K_PENDING);
+  if(!pend||!pend.plan){ showToast('Nenhum plano pendente'); return; }
+  const plan=validatePlanShape(pend.plan)?pend.plan:null;
+  if(!plan){ try{ localStorage.removeItem(K_PENDING); }catch(e){} showToast('O plano pendente estava corrompido'); render(); return; }
+  openPlanPreview(plan, pend.resumo||'');
 }
 
 function toggleAdjust(){
@@ -2776,6 +2797,7 @@ function applyAiPlan(){
   if(!aiPendingPlan) return;
   const doApply=function(){
     WORKOUTS=aiPendingPlan; aiPendingPlan=null;
+    try{ localStorage.removeItem(K_PENDING); }catch(e){}
     try{
       localStorage.setItem(K_PLAN, JSON.stringify(WORKOUTS));
       localStorage.setItem(K_PLAN_META, JSON.stringify({ generatedAt:new Date().toISOString(), resumo:aiPendingResumo }));
@@ -3064,6 +3086,8 @@ function renderAiCard(){
     html+='<button class="bw-add-btn" style="margin-bottom:8px;background:var(--ink)" onclick="openPlanImport()">IMPORTAR TREINO COLADO</button>';
   }
   html+='<div class="ai-status ai-status-live">'+esc(aiStatusText)+'</div>';
+  const pend=loadObj(K_PENDING);
+  if(pend&&pend.plan&&!aiBusy) html+='<button class="reset-link" style="margin:8px auto 0;color:var(--accent)" onclick="recoverPending()">↩ Recuperar plano gerado e não aplicado ('+fmtRelative(pend.at||new Date().toISOString())+')</button>';
   if(custom&&!aiBusy) html+='<button class="reset-link" style="margin:8px auto 0" onclick="restoreDefaultPlan()">Voltar ao plano original</button>';
   if(custom&&meta&&meta.resumo) html+='<div class="session-note" style="margin-top:10px">'+esc(meta.resumo)+'</div>';
   html+='<div style="font-size:10px;color:var(--faint);margin-top:10px">'
@@ -3101,11 +3125,8 @@ function renderGuide(){
   ];
   // grade da semana derivada do plano ativo (reflete plano da IA, se houver)
   const code=function(id){ const t=(WORKOUTS[id]&&WORKOUTS[id].title)||''; return t.split(' ')[0].slice(0,7)||id; };
-  const days=[
-    {n:'SEG', c:code('SEG')}, {n:'TER', c:code('TER')},
-    {n:'QUA', c:WORKOUTS.QUA?code('QUA'):'OFF', rest:!WORKOUTS.QUA},
-    {n:'QUI', c:code('QUI')}, {n:'SEX', c:code('SEX')}, {n:'SÁB', c:code('SAB')}, {n:'DOM', c:code('DOM')},
-  ];
+  const mkd=function(n,id){ return { n:n, c:WORKOUTS[id]?code(id):'OFF', rest:!WORKOUTS[id] }; };
+  const days=[ mkd('SEG','SEG'), mkd('TER','TER'), mkd('QUA','QUA'), mkd('QUI','QUI'), mkd('SEX','SEX'), mkd('SÁB','SAB'), mkd('DOM','DOM') ];
   let html='<div class="section-head"><div class="eyebrow">DIRETRIZES</div><div class="display">GUIA RÁPIDO</div></div>';
   html+=renderAiCard();
   html+=renderSyncCard();
