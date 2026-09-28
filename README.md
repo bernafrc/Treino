@@ -129,6 +129,9 @@ quarta (`PLAN_DAYS` com QUA opcional em `validatePlanShape`/`normalizePlan`/sche
 - **Motor IA (aba GUIA)**: regenera o plano inteiro com a API da Anthropic usando o plano atual,
   o histórico recente, as medidas e as notas de sessão. Mostra preview antes de aplicar, com
   opção de voltar ao plano original a qualquer momento.
+- **Pedir ajuste no preview**: o preview do plano (gerado ou importado) tem "Pedir ajuste" —
+  descreve a mudança, a IA edita SÓ aquilo sobre o plano proposto (prompt cirúrgico, resumo
+  lista só o delta) e o preview se atualiza; itera quantas vezes quiser antes de Aplicar.
 - **Importar treino colado (aba GUIA)**: cola um treino em qualquer formato — texto do personal,
   treino gerado em outro chat, ou JSON do próprio app. JSON válido aplica direto (sem API);
   texto livre é convertido pela IA para o formato do plano (preservando exercícios, séries e

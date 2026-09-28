@@ -873,7 +873,7 @@ const K_DAYMAP = 'wo_daymap_v1';     // troca de treino entre dias válida só n
 const K_GYMS = 'wo_gyms_v1';         // lista de academias (sincronizada, mais-novo-vence)
 const K_GYMSTAMP = 'wo_gymstamp_v1';
 const K_CURGYM = 'wo_curgym_v1';     // academia atual — por aparelho (você está NELA com ELE)
-const APP_BUILD = 'v16';             // manter igual ao CACHE_VERSION do sw.js (treino-vN)
+const APP_BUILD = 'v17';             // manter igual ao CACHE_VERSION do sw.js (treino-vN)
 
 function loadStr(k){ try{return localStorage.getItem(k);}catch(e){return null;} }
 function loadObj(k){ try{const v=localStorage.getItem(k); return v?JSON.parse(v):null;}catch(e){return null;} }
@@ -2708,11 +2708,68 @@ function openPlanPreview(plan, resumo){
       +d.exercises.map(function(e){ return esc(e.name)+' '+e.sets+'×'+esc(e.reps)+(e.graviton?' (ajuda)':''); }).join(' · ')
       +'</div></div>';
   });
+  html+='<div id="adjust-box" style="display:none;margin-top:12px">'
+    +'<textarea class="ai-input" id="adjust-ta" style="min-height:64px;resize:vertical" placeholder="O que ajustar? Ex: troca o agachamento por leg press; sábado mais curto; menos abdômen"></textarea>'
+    +'<button class="bw-add-btn" style="margin-bottom:6px" onclick="aiAdjust()">APLICAR AJUSTE NO PREVIEW</button>'
+    +'<div class="ai-status ai-status-live"></div>'
+    +'<div style="font-size:10px;color:var(--faint)">O ajuste mexe só no que você pedir e mantém o resto do preview idêntico. Cada ajuste consome uma geração (~US$ 0,30). Dá pra ajustar quantas vezes quiser antes de aplicar.</div>'
+    +'</div>';
   document.getElementById('backup-body').innerHTML=html;
   document.getElementById('backup-actions').innerHTML=
     '<button class="btn btn-secondary" onclick="closeAllSheets()">Cancelar</button>'
-    +'<button class="btn btn-primary" onclick="applyAiPlan()">Aplicar plano</button>';
+    +'<button class="btn btn-secondary" style="color:var(--grav);border-color:var(--grav)" onclick="toggleAdjust()">Pedir ajuste</button>'
+    +'<button class="btn btn-primary" onclick="applyAiPlan()">Aplicar</button>';
   openSheetById('backup-sheet');
+}
+
+function toggleAdjust(){
+  const box=document.getElementById('adjust-box');
+  if(!box) return;
+  const show=box.style.display==='none';
+  box.style.display=show?'block':'none';
+  if(show){ const ta=document.getElementById('adjust-ta'); if(ta) ta.focus(); }
+}
+
+// Ajuste cirúrgico sobre o plano PROPOSTO (o que está no preview), iterável.
+async function aiAdjust(){
+  if(aiBusy){ showToast('Já tem uma geração em andamento'); return; }
+  if(!aiPendingPlan){ showToast('Nenhum plano no preview'); return; }
+  const ta=document.getElementById('adjust-ta');
+  const txt=(ta?ta.value:'').trim();
+  if(!txt){ showToast('Escreve o que quer ajustar'); return; }
+  if(!aiHasCreds()){ setAiStatus('Precisa do proxy ou da chave (card MOTOR IA).'); return; }
+  const key=(loadStr(K_APIKEY)||'').trim();
+  aiBusy=true;
+  const acts=document.getElementById('backup-actions');
+  if(acts) acts.innerHTML='<button class="btn btn-secondary" onclick="aiCancel()">Cancelar geração</button>';
+  try{
+    const sys='Você é um personal trainer editando um plano de treino semanal em JSON. O aluno pediu AJUSTES PONTUAIS sobre um plano proposto.\n\n'
+      +'REGRA CENTRAL: aplique SOMENTE os ajustes pedidos e reproduza todo o resto do plano proposto IDÊNTICO — mesmos dias, nomes, séries, reps, rest, infos, bars e alts do que não foi mencionado. Não recalibre nada por conta própria.\n\n'
+      +'FORMATO (igual ao do plano): chaves SEG, TER, QUA (opcional), QUI, SEX, SAB, DOM; exercícios com name, sets, reps (faixa), rest (segundos), finisher, graviton (só máquina assistida), info (1-3 frases), bar (kg da barra livre; 0 nos demais) e alts como TEXTO SIMPLES (alternativa assistida leva "(graviton)" no nome). Finishers por último. resumo: 1-3 frases dizendo SÓ o que mudou neste ajuste. Responda apenas com o JSON.';
+    const usr='PLANO PROPOSTO (base do ajuste):\n'+JSON.stringify(aiPendingPlan)
+      +'\n\nAJUSTES PEDIDOS PELO ALUNO:\n'+txt
+      +'\n\nDevolva o plano completo com apenas esses ajustes aplicados.';
+    const raw=await aiRequest(key,true,sys,usr);
+    const plan=normalizePlan(raw);
+    aiBusy=false;
+    if(!plan){
+      setAiStatus('O ajuste veio fora do formato. Tenta de novo.');
+      if(acts) acts.innerHTML='<button class="btn btn-secondary" onclick="closeAllSheets()">Cancelar</button>'
+        +'<button class="btn btn-secondary" style="color:var(--grav);border-color:var(--grav)" onclick="toggleAdjust()">Pedir ajuste</button>'
+        +'<button class="btn btn-primary" onclick="applyAiPlan()">Aplicar</button>';
+      return;
+    }
+    setAiStatus('');
+    openPlanPreview(plan, typeof raw.resumo==='string'?raw.resumo:'');
+    toggleAdjust(); // reabre a caixa pra emendar outro ajuste se quiser
+    showToast('Ajuste aplicado no preview');
+  }catch(e){
+    aiBusy=false;
+    setAiStatus(aiErrMsg(e));
+    if(acts) acts.innerHTML='<button class="btn btn-secondary" onclick="closeAllSheets()">Cancelar</button>'
+      +'<button class="btn btn-secondary" style="color:var(--grav);border-color:var(--grav)" onclick="toggleAdjust()">Pedir ajuste</button>'
+      +'<button class="btn btn-primary" onclick="applyAiPlan()">Aplicar</button>';
+  }
 }
 
 function applyAiPlan(){
