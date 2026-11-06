@@ -97,6 +97,12 @@
     transition: all 0.15s;
   }
   .tab.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+  /* dia de descanso do plano: aba opcional (tracejada) pra registrar treino extra */
+  .tab.rest { border-style: dashed; border-color: var(--border-strong); background: transparent; color: var(--faint); }
+  .tab.rest.picked { background: var(--card); color: var(--mute); }
+  .tab.rest.active { background: var(--ink); color: #fff; border-color: var(--ink); border-style: solid; }
+  .opt-tag.todo { color: var(--accent); }
+  .opt-sub { display: block; font-size: 10px; color: var(--faint); font-weight: 700; letter-spacing: 0.06em; margin-top: 2px; }
 
   .content { padding: 20px 18px 0; }
   .section-head { margin-bottom: 18px; }
@@ -832,9 +838,10 @@ const DEFAULT_WORKOUTS = {
   },
 };
 
-// Abas de dia derivadas do plano ativo: QUA só aparece se o plano tiver treino nela.
+// Abas de dia: os 7 dias da semana. Dia sem treino no plano vira aba opcional
+// (tracejada) onde dá pra registrar um treino extra da semana.
 function tabsList(){
-  const dayTabs=PLAN_DAYS.filter(k=>WORKOUTS[k]).map(k=>({ id:k, label:k==='SAB'?'SÁB':k }));
+  const dayTabs=PLAN_DAYS.map(k=>({ id:k, label:k==='SAB'?'SÁB':k, rest:!WORKOUTS[k], picked:!!restPick(k) }));
   return dayTabs.concat([{id:'HIST',label:'HIST'},{id:'CORPO',label:'CORPO'},{id:'GUIA',label:'GUIA'}]);
 }
 
@@ -874,7 +881,7 @@ const K_GYMS = 'wo_gyms_v1';         // lista de academias (sincronizada, mais-n
 const K_GYMSTAMP = 'wo_gymstamp_v1';
 const K_CURGYM = 'wo_curgym_v1';     // academia atual — por aparelho (você está NELA com ELE)
 const K_PENDING = 'wo_pendingplan_v1'; // preview gerado e ainda não aplicado (sobrevive a reload)
-const APP_BUILD = 'v18';             // manter igual ao CACHE_VERSION do sw.js (treino-vN)
+const APP_BUILD = 'v19';            // manter igual ao CACHE_VERSION do sw.js (treino-vN)
 
 function loadStr(k){ try{return localStorage.getItem(k);}catch(e){return null;} }
 function loadObj(k){ try{const v=localStorage.getItem(k); return v?JSON.parse(v):null;}catch(e){return null;} }
@@ -988,6 +995,21 @@ let dayMap=(function(){
 function saveDayMap(){ try{ localStorage.setItem(K_DAYMAP, JSON.stringify({week:weekId(), map:dayMap})); }catch(e){} }
 function effDay(tab){ const t=dayMap[tab]; return (t && WORKOUTS[t]) ? t : tab; }
 function tabFor(pd){ for(const t of PLAN_DAYS){ if(WORKOUTS[t] && effDay(t)===pd) return t; } return pd; }
+// Dia de descanso no plano (aba opcional). A escolha de treino extra mora no
+// mesmo dayMap (aba de descanso → dia do plano), então expira na segunda e o
+// histórico grava o workoutId do treino feito, comparando com as outras vezes.
+// Não é permutação: o dia de origem continua mostrando o próprio treino.
+function isRestTab(tab){ return PLAN_DAYS.includes(tab) && !WORKOUTS[tab]; }
+function restPick(tab){ const t=dayMap[tab]; return (isRestTab(tab) && t && WORKOUTS[t]) ? t : null; }
+function weekStartTs(){
+  const d=new Date(); d.setHours(0,0,0,0);
+  d.setDate(d.getDate()-((d.getDay()+6)%7));
+  return d.getTime();
+}
+function doneThisWeek(pd){
+  const t0=weekStartTs();
+  return history.some(function(s){ return s.workoutId===pd && new Date(s.completedAt).getTime()>=t0; });
+}
 
 function normAlt(a){ return typeof a==='string' ? {name:a} : a; }
 // Exercício efetivo do slot: o do plano, ou o substituto escolhido hoje.
@@ -1063,24 +1085,25 @@ function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').rep
 
 // ============ RENDER ============
 function render(){
-  // aba de dia que não existe no plano ativo (ex: QUA depois de restaurar plano de 6 dias)
-  if(active!=='HIST'&&active!=='CORPO'&&active!=='GUIA'&&!WORKOUTS[active]) active=PLAN_DAYS.find(function(k){ return WORKOUTS[k]; })||'GUIA';
+  // aba desconhecida (valor antigo salvo): cai no primeiro dia com treino
+  if(active!=='HIST'&&active!=='CORPO'&&active!=='GUIA'&&!PLAN_DAYS.includes(active)) active=PLAN_DAYS.find(function(k){ return WORKOUTS[k]; })||'GUIA';
   renderTabs();
   renderStats();
   const c = document.getElementById('content');
   if(active==='HIST'){ c.innerHTML=renderHistory(); setupSessionToggles(); }
   else if(active==='CORPO'){ c.innerHTML=renderBody(); }
   else if(active==='GUIA'){ c.innerHTML=renderGuide(); }
+  else if(!WORKOUTS[effDay(active)]){ c.innerHTML=renderRestDay(active); }
   else { c.innerHTML=renderWorkout(active); }
 }
 function renderTabs(){
   document.getElementById('tabs').innerHTML = tabsList().map(t=>
-    '<button class="tab '+(active===t.id?'active':'')+'" onclick="setActive(\''+t.id+'\')">'+t.label+'</button>'
+    '<button class="tab'+(t.rest?' rest':'')+(t.picked?' picked':'')+(active===t.id?' active':'')+'" onclick="setActive(\''+t.id+'\')">'+t.label+'</button>'
   ).join('');
 }
 function renderStats(){
   const el=document.getElementById('stats');
-  if(active==='GUIA'||active==='HIST'||active==='CORPO'){ el.style.visibility='hidden'; return; }
+  if(active==='GUIA'||active==='HIST'||active==='CORPO'||!WORKOUTS[effDay(active)]){ el.style.visibility='hidden'; return; }
   el.style.visibility='visible';
   const c=completion(effDay(active));
   document.getElementById('stat-pct').textContent=c.pct+'%';
@@ -1144,10 +1167,12 @@ function renderWorkout(tabId){
   const wId=effDay(tabId);          // dia do plano exibido nesta aba (pode estar trocado)
   const w=WORKOUTS[wId];
   const isCurrent=current.workoutId===wId;
-  const movedTag=(wId!==tabId)?'<span class="day-tag" style="background:var(--grav-soft);color:var(--grav)">⇆ treino de '+PLAN_SUBS[wId]+'</span> ':'';
+  const extra=isRestTab(tabId); // dia de descanso com treino extra escolhido
+  const movedTag=(wId!==tabId)?'<span class="day-tag" style="background:var(--grav-soft);color:var(--grav)">'+(extra?'extra · ':'⇆ ')+'treino de '+PLAN_SUBS[wId]+'</span> ':'';
+  const swapCall=extra?'openRestPick(\''+tabId+'\')':'openDaySwap(\''+tabId+'\')';
   let html='<div class="section-head"><div class="eyebrow">'+esc(PLAN_SUBS[tabId]||w.sub)+'</div><div class="display">'+esc(w.title)+'</div>'
     +'<div>'+movedTag+(w.day?'<div class="day-tag">'+esc(w.day)+'</div>':'')
-    +' <button class="day-tag" style="border:1px dashed var(--border-strong);background:transparent;color:var(--mute);cursor:pointer" onclick="openDaySwap(\''+tabId+'\')">⇆ trocar o treino do dia</button>'
+    +' <button class="day-tag" style="border:1px dashed var(--border-strong);background:transparent;color:var(--mute);cursor:pointer" onclick="'+swapCall+'">⇆ trocar o treino do dia</button>'
     +' <button class="day-tag" style="background:var(--grav-soft);color:var(--grav);cursor:pointer" onclick="openGymSheet()">📍 '+(curGym()?esc(gymShort(curGym())):'academia?')+'</button></div>'
     +'</div>';
 
@@ -1191,6 +1216,59 @@ function renderWorkout(tabId){
 }
 
 function hintFinalize(){ showToast('Marque suas séries primeiro'); }
+
+// Dia de descanso sem treino escolhido: oferece os treinos da semana como extra.
+function renderRestDay(tabId){
+  let html='<div class="section-head"><div class="eyebrow">'+esc(PLAN_SUBS[tabId])+'</div><div class="display">DESCANSO</div>'
+    +'<div><span class="day-tag" style="background:var(--light);color:var(--mute)">dia livre no plano</span>'
+    +' <button class="day-tag" style="background:var(--grav-soft);color:var(--grav);cursor:pointer" onclick="openGymSheet()">📍 '+(curGym()?esc(gymShort(curGym())):'academia?')+'</button></div>'
+    +'</div>';
+  if(tabId==='SAB'){ // pesagem é do sábado (dia da semana), não do treino
+    html+='<div class="bioimp-card" onclick="setActive(\'CORPO\')">'
+      +'<div><div class="bioimp-title">Sábado: pesagem em jejum</div>'
+      +'<div class="bioimp-sub">Toque para registrar peso, %gordura, %massa magra</div></div>'
+      +'<div class="bioimp-go">›</div></div>';
+  }
+  html+='<div class="guide-card"><div class="guide-label">VAI TREINAR HOJE?</div>'
+    +'<div style="font-size:12px;color:var(--mute);line-height:1.5">Escolha um treino da semana para registrar como extra. Ele entra no histórico como esse treino, comparando com as outras vezes que você o fez. Vale só para esta semana: na segunda o dia volta a ser descanso.</div></div>';
+  html+=restPickRows(tabId);
+  return html;
+}
+
+function restPickRows(tabId){
+  const sel=restPick(tabId);
+  let html='';
+  PLAN_DAYS.forEach(function(pd){
+    const w=WORKOUTS[pd]; if(!w) return;
+    const done=doneThisWeek(pd);
+    html+='<button class="opt-row '+(sel===pd?'sel':'')+'" onclick="pickRestWorkout(\''+tabId+'\',\''+pd+'\')">'
+      +'<span>'+esc(w.title)+'<span class="opt-sub">'+PLAN_SUBS[tabFor(pd)]+(w.day?' · '+esc(w.day):'')+'</span></span>'
+      +'<span class="opt-tag'+(done?'':' todo')+'">'+(done?'FEITO NA SEMANA':'PENDENTE')+'</span></button>';
+  });
+  return html;
+}
+
+function openRestPick(tabId){
+  document.getElementById('backup-eyebrow').textContent='TREINO EXTRA';
+  document.getElementById('backup-title').textContent=PLAN_SUBS[tabId]+': qual treino?';
+  document.getElementById('backup-body').innerHTML=restPickRows(tabId);
+  document.getElementById('backup-actions').innerHTML='<button class="btn btn-secondary" onclick="closeAllSheets()">Cancelar</button>'
+    +(restPick(tabId)?'<button class="btn btn-secondary" onclick="clearRestPick(\''+tabId+'\')">Voltar a descanso</button>':'');
+  openSheetById('backup-sheet');
+}
+
+function pickRestWorkout(tabId,pd){
+  if(!isRestTab(tabId)||!WORKOUTS[pd]) return;
+  dayMap[tabId]=pd; saveDayMap();
+  closeAllSheets(); render(); window.scrollTo({top:0,behavior:'smooth'});
+  showToast(PLAN_SUBS[tabId]+': '+WORKOUTS[pd].title);
+}
+
+function clearRestPick(tabId){
+  delete dayMap[tabId]; saveDayMap();
+  closeAllSheets(); render();
+  showToast(PLAN_SUBS[tabId]+' voltou a ser descanso');
+}
 
 function renderHistory(){
   let html='<div class="section-head"><div class="eyebrow">HISTÓRICO</div><div class="display">EVOLUÇÃO</div></div>';
@@ -1638,7 +1716,13 @@ function applyDaySwap(pdTarget){
     showToast(PLAN_SUBS[tabA]+' agora: '+WORKOUTS[effDay(tabA)].title);
   };
   const doPerm=function(){
-    dayMap={}; saveDayMap(); // troca permanente zera as trocas da semana
+    // troca permanente zera as trocas da semana (mantém os treinos extras dos dias de descanso)
+    // (o extra acompanha o TREINO: se ele mudou de dia no plano, a escolha segue junto)
+    const keep={}; Object.keys(dayMap).forEach(function(t){
+      if(!isRestTab(t)) return;
+      const v=dayMap[t]; keep[t]=(v===tabA)?pdTarget:(v===pdTarget)?tabA:v;
+    });
+    dayMap=keep; saveDayMap();
     // nunca mutar o DEFAULT_WORKOUTS: o "voltar ao plano original" depende dele intacto
     if(WORKOUTS===DEFAULT_WORKOUTS) WORKOUTS=JSON.parse(JSON.stringify(DEFAULT_WORKOUTS));
     const A=WORKOUTS[tabA], B=WORKOUTS[pdTarget];
@@ -2697,12 +2781,10 @@ function reopenAnalysis(){
   renderAnalysisResult(saved);
 }
 
-// Aba do dia de hoje (quarta é descanso → cai na SEG)
+// Aba do dia de hoje (dia de descanso também é aba: abre nele, com a opção de treino extra)
 function todayTabId(){
   const map=['DOM','SEG','TER','QUA','QUI','SEX','SAB'];
-  const t=map[new Date().getDay()];
-  if(WORKOUTS[t]) return t;
-  return PLAN_DAYS.find(function(k){ return WORKOUTS[k]; })||'GUIA';
+  return map[new Date().getDay()];
 }
 
 function openPlanPreview(plan, resumo){
@@ -3161,7 +3243,7 @@ function buildPlanSummaryText(){
     const w=WORKOUTS[pd];
     lines.push('');
     if(!w){ lines.push(PLAN_SUBS[tab]+' — DESCANSO'); return; }
-    const moved=(pd!==tab)?' (⇆ trocado nesta semana)':'';
+    const moved=(pd!==tab)?(isRestTab(tab)?' (treino extra nesta semana)':' (⇆ trocado nesta semana)'):'';
     lines.push(PLAN_SUBS[tab]+' — '+w.title+(w.day?' · '+w.day:'')+moved);
     w.exercises.forEach(function(e,i){
       const extra=[];

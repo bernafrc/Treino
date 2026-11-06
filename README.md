@@ -79,10 +79,11 @@ Regra anti-buraco (semana ruim): inegociáveis são SEG, TER, SEX e os dois dias
 QUI e SÁB caem primeiro. Meta da barra fixa: escada de ajuda 18→15→12→9→6→3→livre, um degrau
 a cada 1-2 semanas.
 
-O app suporta planos de 2 a 7 dias de treino: QUALQUER dia pode ser descanso e a aba some
+O app suporta planos de 2 a 7 dias de treino: QUALQUER dia pode ser descanso
 (`validatePlanShape` exige >=2 dias válidos; `normalizePlan` trata chave ausente ou
 `exercises` vazio como descanso; no schema da IA todos os dias são opcionais e os prompts
-mandam OMITIR dias de descanso). O preview de plano gerado/importado persiste em
+mandam OMITIR dias de descanso). Desde o v19 o dia de descanso continua como aba, tracejada
+(ver "Dias de descanso opcionais" em Funcionalidades). O preview de plano gerado/importado persiste em
 `wo_pendingplan_v1` (sobrevive ao iOS recarregar o PWA) com botão de recuperação no card
 do Motor IA; aplicar limpa o pendente.
 
@@ -116,6 +117,14 @@ do Motor IA; aplicar limpa o pendente.
   Avisa se a troca colar perna com perna (heurística /PERNA/ no título, incluindo DOM→SEG).
   O histórico grava o `workoutId` do treino FEITO (dia do plano), não o dia da semana — os
   deltas de volume continuam comparando treino com treino.
+- **Dias de descanso opcionais (abas tracejadas)**: todo dia sem treino no plano aparece como
+  aba. Ao abrir, mostra os treinos da semana (com PENDENTE / FEITO NA SEMANA, contado desde
+  segunda) e, escolhido um, vira um treino normal com o selo "extra · treino de X". A escolha
+  mora no `dayMap` (aba de descanso → dia do plano), então expira na segunda e é local ao
+  aparelho; diferente da troca entre dias, NÃO é permutação (o dia de origem segue com o próprio
+  treino, e o progresso é compartilhado porque `current` é por `workoutId`). O histórico grava o
+  `workoutId` do treino feito. A troca permanente preserva essas escolhas; "Voltar a descanso"
+  no ⇆ desfaz.
 - **ⓘ por exercício**: campo `info` explica por que o exercício está naquele dia e o que o
   diferencia dos parecidos. Planos da IA vêm com `info` gerado.
 - **Peso da barra**: exercícios de barra livre têm `bar` (20 olímpica, 10 W); o registro da
