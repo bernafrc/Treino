@@ -180,6 +180,18 @@
   }
   .last-session strong { color: var(--ink); font-weight: 700; }
   .last-session .when { color: var(--faint); font-size: 9px; letter-spacing: 0.1em; }
+  /* meta da próxima sessão (progressão dupla) */
+  .next-target {
+    margin-top: 5px; padding: 6px 10px;
+    border: 1px dashed var(--border-strong); border-radius: 6px;
+    font-size: 10px; color: var(--mute);
+    display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  }
+  .next-target strong { color: var(--ink); font-weight: 800; }
+  .next-target .nt-tag { font-size: 9px; font-weight: 800; letter-spacing: 0.1em; color: var(--good); flex-shrink: 0; }
+  .next-target.up { border-color: var(--accent); background: var(--accent-soft); }
+  .next-target.up .nt-tag { color: var(--accent); }
+  .next-target .nt-note { display: block; font-size: 9px; color: var(--faint); margin-top: 2px; }
 
   .sets { display: flex; gap: 5px; margin-top: 10px; }
   .set-btn {
@@ -511,6 +523,10 @@
   <div class="sheet-prev" id="sheet-prev" style="display:none">
     <span id="sheet-prev-label">Última vez nesta série</span>
     <strong id="sheet-prev-val"></strong>
+  </div>
+  <div class="sheet-prev" id="sheet-goal" style="display:none;background:transparent;border:1px dashed var(--border-strong);margin-top:-8px">
+    <span>Meta de hoje</span>
+    <strong id="sheet-goal-val"></strong>
   </div>
   <!-- Equipamento usado na série (opcional) + peso da barra editável -->
   <div id="eq-row" style="display:none;margin-bottom:12px">
@@ -881,7 +897,7 @@ const K_GYMS = 'wo_gyms_v1';         // lista de academias (sincronizada, mais-n
 const K_GYMSTAMP = 'wo_gymstamp_v1';
 const K_CURGYM = 'wo_curgym_v1';     // academia atual — por aparelho (você está NELA com ELE)
 const K_PENDING = 'wo_pendingplan_v1'; // preview gerado e ainda não aplicado (sobrevive a reload)
-const APP_BUILD = 'v19';            // manter igual ao CACHE_VERSION do sw.js (treino-vN)
+const APP_BUILD = 'v20';            // manter igual ao CACHE_VERSION do sw.js (treino-vN)
 
 function loadStr(k){ try{return localStorage.getItem(k);}catch(e){return null;} }
 function loadObj(k){ try{const v=localStorage.getItem(k); return v?JSON.parse(v):null;}catch(e){return null;} }
@@ -1059,6 +1075,84 @@ function maxWeightForExercise(name){
 function minWeightForExercise(name){
   let m=null; history.forEach(s=>s.exercises.forEach(e=>{ if(e.name===name) e.sets.forEach(x=>{ if(m===null||x.weight<m) m=x.weight; }); })); return m;
 }
+// ---- Meta da próxima sessão (progressão dupla) ----
+// Lê a última sessão do exercício (mesma academia, se houver) e a faixa de reps
+// do plano. Carga de trabalho = a maior da sessão (graviton: a menor ajuda);
+// séries de aquecimento mais leves não contam.
+//  - todas as séries de trabalho fecharam o topo da faixa -> sobe um degrau
+//    e volta ao piso;
+//  - já fechou o topo com essa carga em algum treino da sequência -> sobe também;
+//  - senão, mesma carga buscando +1 rep. Mesma carga há 4+ treinos vira aviso,
+//    com a saída de baixar um degrau, fechar o topo e voltar.
+//  - peso 0 (sem carga registrada) no topo -> "colocar carga".
+// Degrau: halter 1kg (<10kg) / 2kg; demais 2.5kg (<50kg) / 5kg; graviton 3kg.
+function repRange(reps){
+  const s=String(reps||'');
+  if(/\d\s*s\b/i.test(s)) return null; // tempo (ex: prancha 45-60s)
+  const m=s.match(/(\d+)\s*-\s*(\d+)/);
+  if(m){ const a=+m[1], b=+m[2]; return a<=b?{lo:a,hi:b}:{lo:b,hi:a}; }
+  const n=s.match(/\d+/);
+  return n?{lo:+n[0],hi:+n[0]}:null;
+}
+function loadStep(name, w, sets, grav){
+  if(grav) return 3;
+  const halter=sets.some(function(s){ return s.eq==='halter'; })
+    || (!sets.some(function(s){ return s.eq; }) && /halter/i.test(name));
+  if(halter) return w<10?1:2;
+  return w<50?2.5:5;
+}
+function workLoad(sets, grav){
+  const ws=sets.map(function(s){ return s.weight; });
+  return grav?Math.min.apply(null,ws):Math.max.apply(null,ws);
+}
+function nextTarget(ex, gym){
+  const rr=repRange(ex.reps); if(!rr) return null;
+  const last=lastSessionForExercise(ex.name, gym);
+  if(!last||!last.sets||!last.sets.length) return null;
+  const grav=!!ex.graviton;
+  const sameGymOnly=!!(gym && last.gym===gym);
+  // sequência de treinos (mais recentes primeiro) com a mesma carga de trabalho
+  const wl=workLoad(last.sets, grav);
+  let streak=0, toppedInStreak=false;
+  for(let i=history.length-1;i>=0;i--){
+    const s=history[i];
+    if(sameGymOnly && s.gym!==gym) continue;
+    const f=s.exercises.find(function(e){ return e.name===ex.name; });
+    if(!f||!f.sets.length) continue;
+    if(workLoad(f.sets, grav)!==wl) break;
+    streak++;
+    const w=f.sets.filter(function(x){ return x.weight===wl; });
+    if(w.every(function(x){ return x.reps>=rr.hi; })) toppedInStreak=true;
+  }
+  const work=last.sets.filter(function(s){ return s.weight===wl; });
+  const minR=Math.min.apply(null, work.map(function(s){ return s.reps; }));
+  const step=loadStep(ex.name, wl, last.sets, grav);
+  const out={ grav:grav, lo:rr.lo, hi:rr.hi, streak:streak };
+  if(toppedInStreak){
+    if(!grav && wl===0){ out.kind='add'; return out; }
+    if(grav && wl===0){ out.kind='reps'; out.w=0; out.t=rr.hi; return out; } // já sem ajuda
+    out.kind='up';
+    out.w=grav?Math.max(0,wl-step):wl+step;
+    return out;
+  }
+  out.kind='reps'; out.w=wl;
+  out.t=Math.min(rr.hi, Math.max(rr.lo, minR+1));
+  if(streak>=4){
+    const alt=grav?wl+step:wl-step;
+    if(alt>0){ out.alt=alt; out.altT=Math.min(rr.hi, rr.lo+2); }
+  }
+  return out;
+}
+function fmtRange(a,b){ return a>=b?String(b):a+'-'+b; }
+function targetText(nt){
+  const kg=function(w){ return (nt.grav?'ajuda ':'')+fmtWeight(w)+'kg'; };
+  if(nt.kind==='add') return { main:'+ carga × '+fmtRange(nt.lo,nt.hi), tag:'COLOCAR CARGA', cls:'up' };
+  if(nt.kind==='up') return { main:kg(nt.w)+' × '+fmtRange(nt.lo,nt.hi), tag:nt.grav?'↓ MENOS AJUDA':'↑ SUBIR CARGA', cls:'up' };
+  const r={ main:kg(nt.w)+' × '+fmtRange(nt.t,nt.hi), tag:'+ REPS', cls:'' };
+  if(nt.alt!==undefined) r.note='mesma carga há '+nt.streak+' treinos · se travar: '+kg(nt.alt)+' × '+fmtRange(nt.altT,nt.hi)+' e volta';
+  return r;
+}
+
 function exerciseVolume(sets){ return sets.reduce((a,s)=>a+(s.weight*s.reps),0); }
 function sessionVolume(sess){ return sess.exercises.reduce((a,e)=>a+exerciseVolume(e.sets),0); }
 function previousSessionByWorkout(wId,beforeOrigIdx){
@@ -1121,6 +1215,13 @@ function renderExerciseCard(wId,ex,i,isCurrent){
     // veio de outra academia? avisa, porque os pesos podem não bater
     const gymTag=(curGym()&&last.gym!==curGym())?' · '+esc(gymShort(last.gym)||'outra acad.'):'';
     lastLine='<div class="last-session"><span>Última: <strong>'+setsStr+'</strong></span><span class="when">'+fmtRelative(last.date)+gymTag+'</span></div>';
+    const nt=nextTarget(ex, curGym());
+    if(nt){
+      const tt=targetText(nt);
+      lastLine+='<div class="next-target '+tt.cls+'"><span>Meta: <strong>'+esc(tt.main)+'</strong>'
+        +(tt.note?'<span class="nt-note">'+esc(tt.note)+'</span>':'')+'</span>'
+        +'<span class="nt-tag">'+tt.tag+'</span></div>';
+    }
   }
 
   let setsHtml='';
@@ -1188,8 +1289,9 @@ function renderWorkout(tabId){
   w.exercises.forEach((ex0,i)=>{ if(!ex0.finisher) html+=renderExerciseCard(wId,effEx(wId,i),i,isCurrent); });
 
   if(finisherEx.length>0){
-    const fname=finisherEx[0].name.toLowerCase();
-    const label=fname.includes('panturrilha')?'PANTURRILHA':'ABDÔMEN';
+    const hasCalf=finisherEx.some(function(e){ return /panturrilha/i.test(e.name); });
+    const hasAbs=finisherEx.some(function(e){ return !/panturrilha/i.test(e.name); });
+    const label=(hasCalf&&hasAbs)?'PANTURRILHA + ABDÔMEN':hasCalf?'PANTURRILHA':'ABDÔMEN';
     html+='<div class="group-divider"><div class="line"></div><div class="label">'+label+'</div><div class="line"></div></div>';
     w.exercises.forEach((ex0,i)=>{ if(ex0.finisher) html+=renderExerciseCard(wId,effEx(wId,i),i,isCurrent); });
   }
@@ -1906,6 +2008,11 @@ function _openSetSheet(wId,exIdx,setIdx){
     document.getElementById('sheet-prev-val').textContent=fmtWeight(ls.weight)+' kg × '+ls.reps+' reps';
     prev.style.display='flex';
   } else prev.style.display='none';
+
+  const nt=nextTarget(ex, curGym());
+  const goal=document.getElementById('sheet-goal');
+  if(nt){ document.getElementById('sheet-goal-val').textContent=targetText(nt).main; goal.style.display='flex'; }
+  else goal.style.display='none';
 
   openSheetById('sheet');
 }

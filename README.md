@@ -125,6 +125,15 @@ do Motor IA; aplicar limpa o pendente.
   treino, e o progresso é compartilhado porque `current` é por `workoutId`). O histórico grava o
   `workoutId` do treino feito. A troca permanente preserva essas escolhas; "Voltar a descanso"
   no ⇆ desfaz.
+- **Meta da próxima sessão (v20)**: cada card mostra, abaixo da "Última", a meta calculada por
+  progressão dupla (`nextTarget`/`targetText`), e a folha de registro repete como "Meta de hoje".
+  Usa a última sessão do exercício (mesma academia, se houver) e a faixa de reps do plano. Carga
+  de trabalho = a maior da sessão (graviton: a menor ajuda), então série de aquecimento não conta.
+  Fechou o topo em todas as séries de trabalho (ou já fechou com essa carga em algum treino da
+  sequência) → sobe um degrau e volta ao piso (↑ SUBIR CARGA / ↓ MENOS AJUDA); senão, mesma carga
+  buscando +1 rep (+ REPS). Mesma carga há 4+ treinos sem fechar → aviso com a saída de baixar um
+  degrau. Peso 0 no topo → COLOCAR CARGA. Degraus: halter 1kg (<10kg) / 2kg, demais 2.5kg (<50kg)
+  / 5kg, graviton 3kg. Só exibe: não muda o pré-preenchimento do registro.
 - **ⓘ por exercício**: campo `info` explica por que o exercício está naquele dia e o que o
   diferencia dos parecidos. Planos da IA vêm com `info` gerado.
 - **Peso da barra**: exercícios de barra livre têm `bar` (20 olímpica, 10 W); o registro da
